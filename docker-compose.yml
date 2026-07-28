@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: xs_share
+    ports:
+      - "5432:5432"
+    volumes:
+      - xs_share_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d xs_share"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/xs_share
+      API_PORT: 5181
+      WEB_ORIGIN: http://localhost:5180
+      SESSION_SECRET: compose-dev-session-secret-change-me
+      AUTH_DEV_LOGIN: "true"
+      COOKIE_SECURE: "false"
+      OAUTH_CALLBACK_BASE_URL: http://localhost:5181
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      X_CLIENT_ID: ""
+      X_CLIENT_SECRET: ""
+      TELEGRAM_BOT_TOKEN: ""
+    ports:
+      - "5181:5181"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      NEXT_PUBLIC_APP_URL: http://localhost:5180
+      NEXT_PUBLIC_API_URL: http://localhost:5181
+      NEXT_PUBLIC_TELEGRAM_BOT_NAME: ""
+    ports:
+      - "5180:5180"
+    depends_on:
+      - api
+
+volumes:
+  xs_share_pg:

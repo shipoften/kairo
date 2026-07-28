@@ -1,0 +1,41 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# build
+dist
+.next
+out
+build
+.turbo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# debug / ide
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+*.pem
+.idea
+.vscode/*
+!.vscode/extensions.json
+.cursor/
+
+# local docs (not published)
+docs/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# drizzle (root only; packages/db/drizzle is committed)
+/drizzle/meta
+
+# misc
+coverage
+*.log
