@@ -61,21 +61,54 @@ export const TaskType = {
 } as const;
 export type TaskType = (typeof TaskType)[keyof typeof TaskType];
 
+export const Currency = {
+  USDT: "USDT",
+} as const;
+export type Currency = (typeof Currency)[keyof typeof Currency];
+
+export const Chain = {
+  TRC20: "trc20",
+} as const;
+export type Chain = (typeof Chain)[keyof typeof Chain];
+
+export const USDT_DECIMALS = 6;
+export const USDT_MICROS_PER_UNIT = 1_000_000;
+
+export function toMicros(amountUsdt: number): number {
+  return Math.round(amountUsdt * USDT_MICROS_PER_UNIT);
+}
+
+export function fromMicros(amountMicros: number): number {
+  return amountMicros / USDT_MICROS_PER_UNIT;
+}
+
+export function formatUsdt(amountMicros: number, fractionDigits = 2): string {
+  return fromMicros(amountMicros).toFixed(fractionDigits);
+}
+
+export const MIN_DEPOSIT_MICROS = 10_000_000;
+export const MIN_WITHDRAW_MICROS = 20_000_000;
+export const WITHDRAW_NETWORK_FEE_MICROS = 1_000_000;
+export const TRC20_CONFIRMATIONS = 20;
+
 export const LedgerType = {
   deposit: "deposit",
   freeze: "freeze",
   unfreeze: "unfreeze",
   commission: "commission",
   withdraw: "withdraw",
+  withdraw_fee: "withdraw_fee",
+  withdraw_refund: "withdraw_refund",
   platform_fee: "platform_fee",
   referral_reward: "referral_reward",
 } as const;
 export type LedgerType = (typeof LedgerType)[keyof typeof LedgerType];
 
 export const DepositStatus = {
-  pending: "pending",
+  detecting: "detecting",
+  confirming: "confirming",
   confirmed: "confirmed",
-  rejected: "rejected",
+  ignored: "ignored",
 } as const;
 export type DepositStatus = (typeof DepositStatus)[keyof typeof DepositStatus];
 
@@ -131,3 +164,11 @@ export const DEFAULT_PLATFORM_FEE_RATE_BPS = 0;
 export const DEFAULT_REFERRAL_EARN_RATE_BPS = 500;
 export const DEFAULT_REFERRAL_PUBLISH_RATE_BPS = 1000;
 export const SESSION_COOKIE_NAME = "xs_session";
+
+export const TRONSCAN_TX_URL = "https://tronscan.org/#/transaction";
+export const TRONSCAN_ADDRESS_URL = "https://tronscan.org/#/address";
+
+/** Loose TRC20 Base58Check shape check (not full checksum). */
+export function isValidTrc20Address(address: string): boolean {
+  return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address.trim());
+}

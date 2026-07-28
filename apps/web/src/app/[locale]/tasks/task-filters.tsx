@@ -1,53 +1,125 @@
 "use client";
 
-import Link from "next/link";
+import { TaskType } from "@xs-share/shared";
 import { useTranslations } from "next-intl";
-import { usePathname, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
 
-const taskTypes = [
-  "x_follow",
-  "x_like",
-  "x_repost",
-  "x_post",
-  "cpa_register",
-  "custom",
-] as const;
+const taskTypes = Object.values(TaskType);
 
-export function TaskFilters({ locale }: { locale: string }) {
+export function TaskFilters() {
   const t = useTranslations("tasks");
+  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const basePath = pathname.replace(`/${locale}`, "") || "/tasks";
+  const minPriceFromUrl = searchParams.get("minPrice") ?? "";
 
-  function href(updates: Record<string, string | undefined>) {
+  function navigate(
+    updates: Record<string, string | undefined>,
+    resetPage = true,
+  ) {
     const params = new URLSearchParams(searchParams.toString());
     for (const [key, value] of Object.entries(updates)) {
       if (!value) params.delete(key);
       else params.set(key, value);
     }
+    if (resetPage) params.delete("page");
     const query = params.toString();
-    return `/${locale}${basePath}${query ? `?${query}` : ""}`;
+    router.push(query ? `${pathname}?${query}` : pathname);
   }
 
+  function applyMinPrice(formData: FormData) {
+    const trimmed = String(formData.get("minPrice") ?? "").trim();
+    if (!trimmed) {
+      navigate({ minPrice: undefined });
+      return;
+    }
+    const dollars = Number(trimmed);
+    if (!Number.isFinite(dollars) || dollars < 0) return;
+    navigate({ minPrice: String(dollars) });
+  }
+
+  const hasFilters = Boolean(
+    searchParams.get("type") ||
+      searchParams.get("minPrice") ||
+      searchParams.get("languageTag") ||
+      (searchParams.get("sort") && searchParams.get("sort") !== "newest"),
+  );
+
   return (
-    <form className="flex flex-wrap gap-3 rounded-2xl border border-line bg-surface p-4 text-sm">
-      <label className="min-w-[10rem] flex-1 space-y-1">
-        <span className="text-muted">{t("filterType")}</span>
+    <aside className="space-y-5 rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium tracking-wide text-foreground">
+          {t("filtersTitle")}
+        </h2>
+        {hasFilters ? (
+          <Link href="/tasks" className="text-sm text-accent hover:text-accent/80">
+            {t("clearFilters")}
+          </Link>
+        ) : null}
+      </div>
+
+      <label className="block space-y-1.5">
+        <span className="text-xs text-muted">{t("filterType")}</span>
         <Select
           aria-label={t("filterType")}
           value={searchParams.get("type") ?? ""}
           options={[
             { value: "", label: t("filterAll") },
-            ...taskTypes.map((type) => ({ value: type, label: type })),
+            ...taskTypes.map((type) => ({
+              value: type,
+              label: t(`types.${type}`),
+            })),
           ]}
           onValueChange={(value) => {
-            window.location.href = href({ type: value || undefined });
+            navigate({ type: value || undefined });
           }}
         />
       </label>
-      <label className="min-w-[10rem] flex-1 space-y-1">
-        <span className="text-muted">{t("filterSort")}</span>
+
+      <form
+        className="block space-y-1.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          applyMinPrice(new FormData(event.currentTarget));
+        }}
+      >
+        <span className="text-xs text-muted">{t("filterMinPrice")}</span>
+        <Input
+          key={minPriceFromUrl}
+          name="minPrice"
+          inputMode="decimal"
+          placeholder={t("minPricePlaceholder")}
+          defaultValue={minPriceFromUrl}
+          aria-label={t("filterMinPrice")}
+        />
+        <Button type="submit" variant="secondary" size="sm" fullWidth>
+          {t("applyFilters")}
+        </Button>
+      </form>
+
+      <label className="block space-y-1.5">
+        <span className="text-xs text-muted">{t("filterLanguage")}</span>
+        <Select
+          aria-label={t("filterLanguage")}
+          value={searchParams.get("languageTag") ?? ""}
+          options={[
+            { value: "", label: t("filterAll") },
+            { value: "en", label: t("languages.en") },
+            { value: "zh", label: t("languages.zh") },
+            { value: "both", label: t("languages.both") },
+          ]}
+          onValueChange={(value) => {
+            navigate({ languageTag: value || undefined });
+          }}
+        />
+      </label>
+
+      <label className="block space-y-1.5">
+        <span className="text-xs text-muted">{t("filterSort")}</span>
         <Select
           aria-label={t("filterSort")}
           value={searchParams.get("sort") ?? "newest"}
@@ -57,28 +129,10 @@ export function TaskFilters({ locale }: { locale: string }) {
             { value: "deadline", label: t("sortDeadline") },
           ]}
           onValueChange={(value) => {
-            window.location.href = href({ sort: value });
+            navigate({ sort: value === "newest" ? undefined : value });
           }}
         />
       </label>
-      <label className="min-w-[10rem] flex-1 space-y-1">
-        <span className="text-muted">{t("filterLanguage")}</span>
-        <Select
-          aria-label={t("filterLanguage")}
-          value={searchParams.get("languageTag") ?? ""}
-          options={[
-            { value: "", label: t("filterAll") },
-            { value: "en", label: "English" },
-            { value: "zh", label: "中文" },
-          ]}
-          onValueChange={(value) => {
-            window.location.href = href({ languageTag: value || undefined });
-          }}
-        />
-      </label>
-      <Link href={href({})} className="self-end text-accent">
-        {t("clearFilters")}
-      </Link>
-    </form>
+    </aside>
   );
 }

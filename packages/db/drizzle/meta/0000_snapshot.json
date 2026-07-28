@@ -1,5 +1,5 @@
 {
-  "id": "23a4203b-8c52-4ebd-a06d-03f297d2291c",
+  "id": "c1f81441-e69d-454a-a686-269bfc99baa7",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -106,6 +106,112 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.deposit_addresses": {
+      "name": "deposit_addresses",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chain": {
+          "name": "chain",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'trc20'"
+        },
+        "address": {
+          "name": "address",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "derivation_index": {
+          "name": "derivation_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "deposit_addresses_address_uidx": {
+          "name": "deposit_addresses_address_uidx",
+          "columns": [
+            {
+              "expression": "address",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "deposit_addresses_user_idx": {
+          "name": "deposit_addresses_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "deposit_addresses_user_id_users_id_fk": {
+          "name": "deposit_addresses_user_id_users_id_fk",
+          "tableFrom": "deposit_addresses",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "deposit_addresses_user_id_unique": {
+          "name": "deposit_addresses_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.deposits": {
       "name": "deposits",
       "schema": "",
@@ -123,18 +229,57 @@
           "primaryKey": false,
           "notNull": true
         },
-        "amount_cents": {
-          "name": "amount_cents",
+        "chain": {
+          "name": "chain",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'trc20'"
+        },
+        "address": {
+          "name": "address",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tx_hash": {
+          "name": "tx_hash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_address": {
+          "name": "from_address",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "amount_micros": {
+          "name": "amount_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
+        },
+        "confirmations": {
+          "name": "confirmations",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "required_confirmations": {
+          "name": "required_confirmations",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 20
         },
         "status": {
           "name": "status",
           "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'detecting'"
         },
         "note": {
           "name": "note",
@@ -142,14 +287,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "reviewed_by_user_id": {
-          "name": "reviewed_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "reviewed_at": {
-          "name": "reviewed_at",
+        "credited_at": {
+          "name": "credited_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -174,6 +313,21 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "deposits_tx_hash_uidx": {
+          "name": "deposits_tx_hash_uidx",
+          "columns": [
+            {
+              "expression": "tx_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -651,8 +805,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "amount_cents": {
-          "name": "amount_cents",
+        "amount_micros": {
+          "name": "amount_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
@@ -881,8 +1035,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "unit_price_cents": {
-          "name": "unit_price_cents",
+        "unit_price_micros": {
+          "name": "unit_price_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
@@ -892,7 +1046,7 @@
           "type": "varchar(8)",
           "primaryKey": false,
           "notNull": true,
-          "default": "'USD'"
+          "default": "'USDT'"
         },
         "total_quota": {
           "name": "total_quota",
@@ -948,8 +1102,8 @@
           "notNull": true,
           "default": "'{}'::jsonb"
         },
-        "frozen_cents": {
-          "name": "frozen_cents",
+        "frozen_micros": {
+          "name": "frozen_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true,
@@ -1169,15 +1323,15 @@
           "primaryKey": false,
           "notNull": true
         },
-        "available_cents": {
-          "name": "available_cents",
+        "available_micros": {
+          "name": "available_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true,
           "default": 0
         },
-        "frozen_cents": {
-          "name": "frozen_cents",
+        "frozen_micros": {
+          "name": "frozen_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true,
@@ -1260,14 +1414,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "amount_cents": {
-          "name": "amount_cents",
+        "amount_micros": {
+          "name": "amount_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
-        "remaining_cents": {
-          "name": "remaining_cents",
+        "remaining_micros": {
+          "name": "remaining_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
@@ -1376,14 +1530,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "amount_cents": {
-          "name": "amount_cents",
+        "amount_micros": {
+          "name": "amount_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
-        "balance_after_cents": {
-          "name": "balance_after_cents",
+        "balance_after_micros": {
+          "name": "balance_after_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
@@ -1403,6 +1557,24 @@
         "related_user_id": {
           "name": "related_user_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deposit_id": {
+          "name": "deposit_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "withdrawal_id": {
+          "name": "withdrawal_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tx_hash": {
+          "name": "tx_hash",
+          "type": "varchar(128)",
           "primaryKey": false,
           "notNull": false
         },
@@ -1490,17 +1662,42 @@
           "primaryKey": false,
           "notNull": true
         },
-        "amount_cents": {
-          "name": "amount_cents",
+        "chain": {
+          "name": "chain",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'trc20'"
+        },
+        "to_address": {
+          "name": "to_address",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount_micros": {
+          "name": "amount_micros",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
-        "payout_info": {
-          "name": "payout_info",
-          "type": "text",
+        "network_fee_micros": {
+          "name": "network_fee_micros",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
+        },
+        "net_payout_micros": {
+          "name": "net_payout_micros",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tx_hash": {
+          "name": "tx_hash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
         },
         "status": {
           "name": "status",

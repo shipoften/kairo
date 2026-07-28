@@ -8,8 +8,8 @@ type ReferralData = {
   inviteCode: string;
   inviteUrl: string;
   inviteeCount: number;
-  totalRewardCents: number;
-  rewards: Array<{ id: string; amountCents: number; trigger: string }>;
+  totalRewardMicros: number;
+  rewards: Array<{ id: string; amountMicros: number; trigger: string }>;
 };
 
 export default async function InvitePage({
@@ -39,13 +39,13 @@ export default async function InvitePage({
         </div>
         <div className="rounded-2xl border border-line bg-surface p-5">
           <p className="text-sm text-muted">{t("total")}</p>
-          <p className="mt-2 text-3xl">{(data.totalRewardCents / 100).toFixed(2)}</p>
+          <p className="mt-2 text-3xl">{(data.totalRewardMicros / 1_000_000).toFixed(2)}</p>
         </div>
       </div>
       <ul className="space-y-2">
         {data.rewards.map((reward) => (
           <li key={reward.id} className="rounded-xl border border-line bg-surface px-4 py-3 text-sm">
-            {reward.trigger}: {(reward.amountCents / 100).toFixed(2)}
+            {reward.trigger}: {(reward.amountMicros / 1_000_000).toFixed(2)}
           </li>
         ))}
       </ul>

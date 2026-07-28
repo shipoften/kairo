@@ -1,5 +1,7 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import {
+  depositAddresses,
+  deposits,
   joins,
   referralRewards,
   tasks,
@@ -7,16 +9,22 @@ import {
   walletAccounts,
   walletHolds,
   walletLedgers,
+  withdrawals,
 } from "@xs-share/db";
 import {
+  Chain,
+  DepositStatus,
   ErrorCode,
   JoinStatus,
   LedgerType,
   ReferralTrigger,
   TaskStatus,
+  WithdrawalStatus,
+  formatUsdt,
 } from "@xs-share/shared";
 import { getDb } from "../lib/db";
 import { AppError, conflict, notFound, validation } from "../lib/errors";
+import { DEFAULT_CHAIN, getChainAdapter } from "./chain";
 import { bpsAmount, getPlatformSettings } from "./config";
 import { notifyUser } from "./notify";
 
@@ -33,19 +41,22 @@ async function getWalletOrThrow(userId: string) {
 
 async function creditAvailable(input: {
   userId: string;
-  amountCents: number;
+  amountMicros: number;
   type: string;
   taskId?: string;
   joinId?: string;
   relatedUserId?: string;
+  depositId?: string;
+  withdrawalId?: string;
+  txHash?: string;
   note?: string;
 }) {
-  if (input.amountCents <= 0) return null;
+  if (input.amountMicros <= 0) return null;
   const db = getDb();
   const [wallet] = await db
     .update(walletAccounts)
     .set({
-      availableCents: sql`${walletAccounts.availableCents} + ${input.amountCents}`,
+      availableMicros: sql`${walletAccounts.availableMicros} + ${input.amountMicros}`,
       updatedAt: new Date(),
     })
     .where(eq(walletAccounts.userId, input.userId))
@@ -56,11 +67,14 @@ async function creditAvailable(input: {
     .values({
       userId: input.userId,
       type: input.type,
-      amountCents: input.amountCents,
-      balanceAfterCents: wallet.availableCents,
+      amountMicros: input.amountMicros,
+      balanceAfterMicros: wallet.availableMicros,
       taskId: input.taskId,
       joinId: input.joinId,
       relatedUserId: input.relatedUserId,
+      depositId: input.depositId,
+      withdrawalId: input.withdrawalId,
+      txHash: input.txHash,
       note: input.note,
     })
     .returning();
@@ -68,69 +82,510 @@ async function creditAvailable(input: {
   return ledger;
 }
 
-export async function freezeForTaskPublish(input: {
-  publisherId: string;
-  taskId: string;
-  amountCents: number;
-}) {
-  if (input.amountCents <= 0) throw validation("Freeze amount must be positive");
+export async function ensureDepositAddress(userId: string) {
   const db = getDb();
-  const wallet = await getWalletOrThrow(input.publisherId);
-  if (wallet.availableCents < input.amountCents) {
-    throw new AppError(
-      ErrorCode.INSUFFICIENT_BALANCE,
-      "Insufficient available balance",
-      400,
+  const existing = await db.query.depositAddresses.findFirst({
+    where: eq(depositAddresses.userId, userId),
+  });
+  if (existing) return existing;
+
+  const adapter = getChainAdapter();
+  const [{ value: addressCount }] = await db
+    .select({ value: count() })
+    .from(depositAddresses);
+  const derivationIndex = Number(addressCount);
+  const address = await adapter.allocateAddress(userId, derivationIndex);
+
+  const [row] = await db
+    .insert(depositAddresses)
+    .values({
+      userId,
+      chain: DEFAULT_CHAIN,
+      address,
+      derivationIndex,
+    })
+    .returning();
+
+  return row;
+}
+
+export async function creditOnChainDeposit(input: {
+  userId: string;
+  address: string;
+  txHash: string;
+  fromAddress?: string;
+  amountMicros: number;
+  confirmations: number;
+  requiredConfirmations: number;
+  chain?: string;
+}) {
+  if (input.amountMicros <= 0) {
+    throw validation("Deposit amount must be positive");
+  }
+
+  const db = getDb();
+  const existing = await db.query.deposits.findFirst({
+    where: eq(deposits.txHash, input.txHash),
+  });
+
+  if (existing) {
+    if (existing.status === DepositStatus.confirmed) {
+      return { deposit: existing, credited: false };
+    }
+
+    const nextStatus =
+      input.confirmations >= input.requiredConfirmations
+        ? DepositStatus.confirmed
+        : DepositStatus.confirming;
+
+    if (
+      nextStatus === DepositStatus.confirmed &&
+      existing.status !== DepositStatus.confirmed
+    ) {
+      return db.transaction(async (tx) => {
+        const [wallet] = await tx
+          .update(walletAccounts)
+          .set({
+            availableMicros: sql`${walletAccounts.availableMicros} + ${existing.amountMicros}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(walletAccounts.userId, existing.userId))
+          .returning();
+
+        await tx.insert(walletLedgers).values({
+          userId: existing.userId,
+          type: LedgerType.deposit,
+          amountMicros: existing.amountMicros,
+          balanceAfterMicros: wallet.availableMicros,
+          depositId: existing.id,
+          txHash: existing.txHash,
+          note: "on-chain deposit confirmed",
+        });
+
+        const [updated] = await tx
+          .update(deposits)
+          .set({
+            confirmations: input.confirmations,
+            status: DepositStatus.confirmed,
+            creditedAt: new Date(),
+          })
+          .where(eq(deposits.id, existing.id))
+          .returning();
+
+        return { deposit: updated, credited: true };
+      });
+    }
+
+    const [updated] = await db
+      .update(deposits)
+      .set({
+        confirmations: input.confirmations,
+        status: nextStatus,
+      })
+      .where(eq(deposits.id, existing.id))
+      .returning();
+
+    return { deposit: updated, credited: false };
+  }
+
+  const settings = await getPlatformSettings();
+  if (input.amountMicros < settings.minDepositMicros) {
+    const [ignored] = await db
+      .insert(deposits)
+      .values({
+        userId: input.userId,
+        chain: input.chain ?? Chain.TRC20,
+        address: input.address,
+        txHash: input.txHash,
+        fromAddress: input.fromAddress,
+        amountMicros: input.amountMicros,
+        confirmations: input.confirmations,
+        requiredConfirmations: input.requiredConfirmations,
+        status: DepositStatus.ignored,
+        note: "below minimum deposit",
+      })
+      .returning();
+    return { deposit: ignored, credited: false };
+  }
+
+  const confirmed = input.confirmations >= input.requiredConfirmations;
+  const status = confirmed
+    ? DepositStatus.confirmed
+    : input.confirmations > 0
+      ? DepositStatus.confirming
+      : DepositStatus.detecting;
+
+  if (!confirmed) {
+    const [row] = await db
+      .insert(deposits)
+      .values({
+        userId: input.userId,
+        chain: input.chain ?? Chain.TRC20,
+        address: input.address,
+        txHash: input.txHash,
+        fromAddress: input.fromAddress,
+        amountMicros: input.amountMicros,
+        confirmations: input.confirmations,
+        requiredConfirmations: input.requiredConfirmations,
+        status,
+      })
+      .returning();
+    return { deposit: row, credited: false };
+  }
+
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(deposits)
+      .values({
+        userId: input.userId,
+        chain: input.chain ?? Chain.TRC20,
+        address: input.address,
+        txHash: input.txHash,
+        fromAddress: input.fromAddress,
+        amountMicros: input.amountMicros,
+        confirmations: input.confirmations,
+        requiredConfirmations: input.requiredConfirmations,
+        status: DepositStatus.confirmed,
+        creditedAt: new Date(),
+      })
+      .returning();
+
+    const [wallet] = await tx
+      .update(walletAccounts)
+      .set({
+        availableMicros: sql`${walletAccounts.availableMicros} + ${input.amountMicros}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(walletAccounts.userId, input.userId))
+      .returning();
+
+    await tx.insert(walletLedgers).values({
+      userId: input.userId,
+      type: LedgerType.deposit,
+      amountMicros: input.amountMicros,
+      balanceAfterMicros: wallet.availableMicros,
+      depositId: row.id,
+      txHash: input.txHash,
+      note: "on-chain deposit confirmed",
+    });
+
+    return { deposit: row, credited: true };
+  });
+}
+
+export async function simulateDeposit(input: {
+  userId: string;
+  amountMicros: number;
+  confirmations?: number;
+  txHash?: string;
+}) {
+  const settings = await getPlatformSettings();
+  const addressRow = await ensureDepositAddress(input.userId);
+  const adapter = getChainAdapter();
+  if (!adapter.injectIncoming) {
+    throw conflict("Deposit simulate only available with mock chain adapter");
+  }
+
+  const required = settings.trc20Confirmations;
+  const confirmations = input.confirmations ?? required;
+  const txHash =
+    input.txHash ??
+    `mocktx_${input.userId.slice(0, 8)}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+
+  adapter.injectIncoming({
+    txHash,
+    fromAddress: "TMockSender000000000000000000000001",
+    toAddress: addressRow.address,
+    amountMicros: input.amountMicros,
+    confirmations,
+    blockTimestamp: new Date(),
+  });
+
+  const result = await creditOnChainDeposit({
+    userId: input.userId,
+    address: addressRow.address,
+    txHash,
+    fromAddress: "TMockSender000000000000000000000001",
+    amountMicros: input.amountMicros,
+    confirmations,
+    requiredConfirmations: required,
+  });
+
+  if (result.credited) {
+    await notifyUser({
+      userId: input.userId,
+      type: "deposit_confirmed",
+      title: "Deposit confirmed",
+      body: `Your deposit of ${formatUsdt(input.amountMicros)} USDT was confirmed.`,
+    });
+  }
+
+  return result;
+}
+
+export async function requestWithdraw(input: {
+  userId: string;
+  amountMicros: number;
+  toAddress: string;
+}) {
+  const settings = await getPlatformSettings();
+  const adapter = getChainAdapter();
+
+  if (input.amountMicros < settings.minWithdrawMicros) {
+    throw validation(
+      `Minimum withdraw is ${formatUsdt(settings.minWithdrawMicros)} USDT`,
     );
+  }
+  if (input.amountMicros <= settings.withdrawNetworkFeeMicros) {
+    throw validation("Withdraw amount must exceed network fee");
+  }
+  if (!adapter.isValidAddress(input.toAddress.trim())) {
+    throw validation("Invalid TRC20 address");
+  }
+
+  const networkFeeMicros = settings.withdrawNetworkFeeMicros;
+  const netPayoutMicros = input.amountMicros - networkFeeMicros;
+  const db = getDb();
+
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(walletAccounts)
+      .set({
+        availableMicros: sql`${walletAccounts.availableMicros} - ${input.amountMicros}`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(walletAccounts.userId, input.userId),
+          sql`${walletAccounts.availableMicros} >= ${input.amountMicros}`,
+        ),
+      )
+      .returning();
+
+    if (!updated) {
+      throw new AppError(
+        ErrorCode.INSUFFICIENT_BALANCE,
+        "Insufficient available balance",
+        400,
+      );
+    }
+
+    const [row] = await tx
+      .insert(withdrawals)
+      .values({
+        userId: input.userId,
+        chain: Chain.TRC20,
+        toAddress: input.toAddress.trim(),
+        amountMicros: input.amountMicros,
+        networkFeeMicros,
+        netPayoutMicros,
+        status: WithdrawalStatus.pending,
+      })
+      .returning();
+
+    await tx.insert(walletLedgers).values({
+      userId: input.userId,
+      type: LedgerType.withdraw,
+      amountMicros: -input.amountMicros,
+      balanceAfterMicros: updated.availableMicros,
+      withdrawalId: row.id,
+      note: "withdraw reserved",
+    });
+
+    return row;
+  });
+}
+
+export async function approveWithdraw(input: {
+  withdrawalId: string;
+  adminId: string;
+}) {
+  const db = getDb();
+  const row = await db.query.withdrawals.findFirst({
+    where: eq(withdrawals.id, input.withdrawalId),
+  });
+  if (!row) throw notFound("Withdrawal not found");
+  if (row.status !== WithdrawalStatus.pending) {
+    throw conflict("Withdrawal not pending");
   }
 
   const [updated] = await db
-    .update(walletAccounts)
+    .update(withdrawals)
     .set({
-      availableCents: sql`${walletAccounts.availableCents} - ${input.amountCents}`,
-      frozenCents: sql`${walletAccounts.frozenCents} + ${input.amountCents}`,
-      updatedAt: new Date(),
+      status: WithdrawalStatus.approved,
+      reviewedByUserId: input.adminId,
+      reviewedAt: new Date(),
     })
-    .where(
-      and(
-        eq(walletAccounts.userId, input.publisherId),
-        sql`${walletAccounts.availableCents} >= ${input.amountCents}`,
-      ),
-    )
+    .where(eq(withdrawals.id, row.id))
     .returning();
 
-  if (!updated) {
-    throw new AppError(
-      ErrorCode.INSUFFICIENT_BALANCE,
-      "Insufficient available balance",
-      400,
-    );
+  return updated;
+}
+
+export async function markWithdrawPaid(input: {
+  withdrawalId: string;
+  adminId: string;
+  txHash: string;
+}) {
+  const txHash = input.txHash.trim();
+  if (!txHash) throw validation("txHash required");
+
+  const db = getDb();
+  const row = await db.query.withdrawals.findFirst({
+    where: eq(withdrawals.id, input.withdrawalId),
+  });
+  if (!row) throw notFound("Withdrawal not found");
+  if (
+    row.status !== WithdrawalStatus.pending &&
+    row.status !== WithdrawalStatus.approved
+  ) {
+    throw conflict("Withdrawal not payable");
   }
 
-  await db.insert(walletLedgers).values({
-    userId: input.publisherId,
-    type: LedgerType.freeze,
-    amountCents: -input.amountCents,
-    balanceAfterCents: updated.availableCents,
-    taskId: input.taskId,
-  });
-
-  await db.insert(walletHolds).values({
-    taskId: input.taskId,
-    userId: input.publisherId,
-    amountCents: input.amountCents,
-    remainingCents: input.amountCents,
-    status: "active",
-  });
-
-  await db
-    .update(tasks)
+  const [updated] = await db
+    .update(withdrawals)
     .set({
-      frozenCents: input.amountCents,
-      status: TaskStatus.recruiting,
-      updatedAt: new Date(),
+      status: WithdrawalStatus.paid,
+      txHash,
+      reviewedByUserId: input.adminId,
+      reviewedAt: new Date(),
     })
-    .where(eq(tasks.id, input.taskId));
+    .where(eq(withdrawals.id, row.id))
+    .returning();
+
+  const wallet = await getWalletOrThrow(row.userId);
+  await db.insert(walletLedgers).values({
+    userId: row.userId,
+    type: LedgerType.withdraw_fee,
+    amountMicros: -row.networkFeeMicros,
+    balanceAfterMicros: wallet.availableMicros,
+    withdrawalId: row.id,
+    txHash,
+    note: "network fee from withdraw",
+  });
+
+  await notifyUser({
+    userId: row.userId,
+    type: "withdrawal_paid",
+    title: "Withdrawal paid",
+    body: `Your withdrawal of ${formatUsdt(row.netPayoutMicros)} USDT was paid.`,
+  });
+
+  return updated;
+}
+
+export async function rejectWithdraw(input: {
+  withdrawalId: string;
+  adminId: string;
+  note?: string;
+}) {
+  const db = getDb();
+  const row = await db.query.withdrawals.findFirst({
+    where: eq(withdrawals.id, input.withdrawalId),
+  });
+  if (!row) throw notFound("Withdrawal not found");
+  if (
+    row.status !== WithdrawalStatus.pending &&
+    row.status !== WithdrawalStatus.approved
+  ) {
+    throw conflict("Withdrawal not rejectable");
+  }
+
+  await db.transaction(async (tx) => {
+    const [wallet] = await tx
+      .update(walletAccounts)
+      .set({
+        availableMicros: sql`${walletAccounts.availableMicros} + ${row.amountMicros}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(walletAccounts.userId, row.userId))
+      .returning();
+
+    await tx.insert(walletLedgers).values({
+      userId: row.userId,
+      type: LedgerType.withdraw_refund,
+      amountMicros: row.amountMicros,
+      balanceAfterMicros: wallet.availableMicros,
+      withdrawalId: row.id,
+      note: input.note ?? "withdraw rejected refund",
+    });
+
+    await tx
+      .update(withdrawals)
+      .set({
+        status: WithdrawalStatus.rejected,
+        note: input.note,
+        reviewedByUserId: input.adminId,
+        reviewedAt: new Date(),
+      })
+      .where(eq(withdrawals.id, row.id));
+  });
+
+  await notifyUser({
+    userId: row.userId,
+    type: "withdrawal_rejected",
+    title: "Withdrawal rejected",
+    body: input.note ?? "Your withdrawal was rejected and funds returned.",
+  });
+}
+
+export async function freezeForTaskPublish(input: {
+  publisherId: string;
+  taskId: string;
+  amountMicros: number;
+}) {
+  if (input.amountMicros <= 0) throw validation("Freeze amount must be positive");
+  const db = getDb();
+
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(walletAccounts)
+      .set({
+        availableMicros: sql`${walletAccounts.availableMicros} - ${input.amountMicros}`,
+        frozenMicros: sql`${walletAccounts.frozenMicros} + ${input.amountMicros}`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(walletAccounts.userId, input.publisherId),
+          sql`${walletAccounts.availableMicros} >= ${input.amountMicros}`,
+        ),
+      )
+      .returning();
+
+    if (!updated) {
+      throw new AppError(
+        ErrorCode.INSUFFICIENT_BALANCE,
+        "Insufficient available balance",
+        400,
+      );
+    }
+
+    await tx.insert(walletLedgers).values({
+      userId: input.publisherId,
+      type: LedgerType.freeze,
+      amountMicros: -input.amountMicros,
+      balanceAfterMicros: updated.availableMicros,
+      taskId: input.taskId,
+    });
+
+    await tx.insert(walletHolds).values({
+      taskId: input.taskId,
+      userId: input.publisherId,
+      amountMicros: input.amountMicros,
+      remainingMicros: input.amountMicros,
+      status: "active",
+    });
+
+    await tx
+      .update(tasks)
+      .set({
+        frozenMicros: input.amountMicros,
+        status: TaskStatus.recruiting,
+        updatedAt: new Date(),
+      })
+      .where(eq(tasks.id, input.taskId));
+  });
 }
 
 export async function releaseTaskHoldRemaining(taskId: string) {
@@ -138,36 +593,38 @@ export async function releaseTaskHoldRemaining(taskId: string) {
   const hold = await db.query.walletHolds.findFirst({
     where: eq(walletHolds.taskId, taskId),
   });
-  if (!hold || hold.status !== "active" || hold.remainingCents <= 0) return;
+  if (!hold || hold.status !== "active" || hold.remainingMicros <= 0) return;
 
-  const [updated] = await db
-    .update(walletAccounts)
-    .set({
-      availableCents: sql`${walletAccounts.availableCents} + ${hold.remainingCents}`,
-      frozenCents: sql`${walletAccounts.frozenCents} - ${hold.remainingCents}`,
-      updatedAt: new Date(),
-    })
-    .where(eq(walletAccounts.userId, hold.userId))
-    .returning();
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(walletAccounts)
+      .set({
+        availableMicros: sql`${walletAccounts.availableMicros} + ${hold.remainingMicros}`,
+        frozenMicros: sql`${walletAccounts.frozenMicros} - ${hold.remainingMicros}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(walletAccounts.userId, hold.userId))
+      .returning();
 
-  await db.insert(walletLedgers).values({
-    userId: hold.userId,
-    type: LedgerType.unfreeze,
-    amountCents: hold.remainingCents,
-    balanceAfterCents: updated.availableCents,
-    taskId,
+    await tx.insert(walletLedgers).values({
+      userId: hold.userId,
+      type: LedgerType.unfreeze,
+      amountMicros: hold.remainingMicros,
+      balanceAfterMicros: updated.availableMicros,
+      taskId,
+    });
+
+    await tx
+      .update(walletHolds)
+      .set({ remainingMicros: 0, status: "released", updatedAt: new Date() })
+      .where(eq(walletHolds.id, hold.id));
   });
-
-  await db
-    .update(walletHolds)
-    .set({ remainingCents: 0, status: "released", updatedAt: new Date() })
-    .where(eq(walletHolds.id, hold.id));
 }
 
 async function applyReferralRewards(input: {
   inviteeId: string;
-  commissionCents: number;
-  platformFeeCents: number;
+  commissionMicros: number;
+  platformFeeMicros: number;
   taskId: string;
   joinId: string;
 }) {
@@ -187,13 +644,13 @@ async function applyReferralRewards(input: {
   if (inviter.id === invitee.id) return;
 
   const earnReward = bpsAmount(
-    input.commissionCents,
+    input.commissionMicros,
     settings.referralEarnRateBps,
   );
   if (earnReward > 0) {
     const ledger = await creditAvailable({
       userId: inviter.id,
-      amountCents: earnReward,
+      amountMicros: earnReward,
       type: LedgerType.referral_reward,
       taskId: input.taskId,
       joinId: input.joinId,
@@ -204,7 +661,7 @@ async function applyReferralRewards(input: {
       inviterId: inviter.id,
       inviteeId: invitee.id,
       trigger: ReferralTrigger.earn_settle,
-      amountCents: earnReward,
+      amountMicros: earnReward,
       joinId: input.joinId,
       taskId: input.taskId,
       ledgerId: ledger?.id,
@@ -213,24 +670,18 @@ async function applyReferralRewards(input: {
       userId: inviter.id,
       type: "referral_reward",
       title: "Referral reward received",
-      body: `You earned ${earnReward} cents from a referral settlement.`,
+      body: `You earned ${formatUsdt(earnReward)} USDT from a referral settlement.`,
     });
   }
-
-  const publishReward = bpsAmount(
-    input.platformFeeCents,
-    settings.referralPublishRateBps,
-  );
-  // publish fee referral is for when invitee is publisher; handled in settlePublishFeeReferral
 }
 
 export async function settlePublishFeeReferral(input: {
   publisherId: string;
-  platformFeeCents: number;
+  platformFeeMicros: number;
   taskId: string;
   joinId: string;
 }) {
-  if (input.platformFeeCents <= 0) return;
+  if (input.platformFeeMicros <= 0) return;
   const settings = await getPlatformSettings();
   if (!settings.referralEnabled) return;
 
@@ -246,14 +697,14 @@ export async function settlePublishFeeReferral(input: {
   if (!inviter || !inviter.referralEnabled || inviter.bannedAt) return;
 
   const reward = bpsAmount(
-    input.platformFeeCents,
+    input.platformFeeMicros,
     settings.referralPublishRateBps,
   );
   if (reward <= 0) return;
 
   const ledger = await creditAvailable({
     userId: inviter.id,
-    amountCents: reward,
+    amountMicros: reward,
     type: LedgerType.referral_reward,
     taskId: input.taskId,
     joinId: input.joinId,
@@ -265,7 +716,7 @@ export async function settlePublishFeeReferral(input: {
     inviterId: inviter.id,
     inviteeId: publisher.id,
     trigger: ReferralTrigger.publish_fee,
-    amountCents: reward,
+    amountMicros: reward,
     joinId: input.joinId,
     taskId: input.taskId,
     ledgerId: ledger?.id,
@@ -275,7 +726,7 @@ export async function settlePublishFeeReferral(input: {
     userId: inviter.id,
     type: "referral_reward",
     title: "Referral reward received",
-    body: `You earned ${reward} cents from a referred publisher fee.`,
+    body: `You earned ${formatUsdt(reward)} USDT from a referred publisher fee.`,
   });
 }
 
@@ -302,95 +753,107 @@ export async function approveJoin(input: {
   }
 
   const settings = await getPlatformSettings();
-  const unitPrice = task.unitPriceCents;
-  const platformFeeCents = bpsAmount(unitPrice, settings.platformFeeRateBps);
-  const commissionCents = unitPrice - platformFeeCents;
-  if (commissionCents < 0) throw validation("Invalid fee configuration");
+  const unitPrice = task.unitPriceMicros;
+  const platformFeeMicros = bpsAmount(unitPrice, settings.platformFeeRateBps);
+  const commissionMicros = unitPrice - platformFeeMicros;
+  if (commissionMicros < 0) throw validation("Invalid fee configuration");
 
   const hold = await db.query.walletHolds.findFirst({
     where: eq(walletHolds.taskId, task.id),
   });
-  if (!hold || hold.remainingCents < unitPrice) {
+  if (!hold || hold.remainingMicros < unitPrice) {
     throw conflict("Insufficient task hold for settlement");
   }
 
-  await db
-    .update(walletHolds)
-    .set({
-      remainingCents: hold.remainingCents - unitPrice,
-      updatedAt: new Date(),
-      status: hold.remainingCents - unitPrice <= 0 ? "depleted" : "active",
-    })
-    .where(eq(walletHolds.id, hold.id));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(walletHolds)
+      .set({
+        remainingMicros: hold.remainingMicros - unitPrice,
+        updatedAt: new Date(),
+        status: hold.remainingMicros - unitPrice <= 0 ? "depleted" : "active",
+      })
+      .where(eq(walletHolds.id, hold.id));
 
-  const [publisherWallet] = await db
-    .update(walletAccounts)
-    .set({
-      frozenCents: sql`${walletAccounts.frozenCents} - ${unitPrice}`,
-      updatedAt: new Date(),
-    })
-    .where(eq(walletAccounts.userId, task.publisherId))
-    .returning();
+    const [publisherWallet] = await tx
+      .update(walletAccounts)
+      .set({
+        frozenMicros: sql`${walletAccounts.frozenMicros} - ${unitPrice}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(walletAccounts.userId, task.publisherId))
+      .returning();
 
-  await db.insert(walletLedgers).values({
-    userId: task.publisherId,
-    type: LedgerType.unfreeze,
-    amountCents: -unitPrice,
-    balanceAfterCents: publisherWallet.availableCents,
-    taskId: task.id,
-    joinId: join.id,
-    note: "settlement release from hold",
-  });
-
-  await creditAvailable({
-    userId: join.earnerId,
-    amountCents: commissionCents,
-    type: LedgerType.commission,
-    taskId: task.id,
-    joinId: join.id,
-  });
-
-  if (platformFeeCents > 0) {
-    await db.insert(walletLedgers).values({
+    await tx.insert(walletLedgers).values({
       userId: task.publisherId,
-      type: LedgerType.platform_fee,
-      amountCents: -platformFeeCents,
-      balanceAfterCents: publisherWallet.availableCents,
+      type: LedgerType.unfreeze,
+      amountMicros: -unitPrice,
+      balanceAfterMicros: publisherWallet.availableMicros,
       taskId: task.id,
       joinId: join.id,
-      note: "platform fee (from hold)",
+      note: "settlement release from hold",
     });
-  }
 
-  await db
-    .update(joins)
-    .set({
-      status: JoinStatus.approved,
-      reviewedAt: new Date(),
-      updatedAt: new Date(),
-      rejectReason: null,
-    })
-    .where(eq(joins.id, join.id));
+    const [earnerWallet] = await tx
+      .update(walletAccounts)
+      .set({
+        availableMicros: sql`${walletAccounts.availableMicros} + ${commissionMicros}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(walletAccounts.userId, join.earnerId))
+      .returning();
 
-  await db
-    .update(tasks)
-    .set({
-      frozenCents: Math.max(0, task.frozenCents - unitPrice),
-      updatedAt: new Date(),
-    })
-    .where(eq(tasks.id, task.id));
+    await tx.insert(walletLedgers).values({
+      userId: join.earnerId,
+      type: LedgerType.commission,
+      amountMicros: commissionMicros,
+      balanceAfterMicros: earnerWallet.availableMicros,
+      taskId: task.id,
+      joinId: join.id,
+    });
+
+    if (platformFeeMicros > 0) {
+      await tx.insert(walletLedgers).values({
+        userId: task.publisherId,
+        type: LedgerType.platform_fee,
+        amountMicros: -platformFeeMicros,
+        balanceAfterMicros: publisherWallet.availableMicros,
+        taskId: task.id,
+        joinId: join.id,
+        note: "platform fee (from hold)",
+      });
+    }
+
+    await tx
+      .update(joins)
+      .set({
+        status: JoinStatus.approved,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+        rejectReason: null,
+      })
+      .where(eq(joins.id, join.id));
+
+    await tx
+      .update(tasks)
+      .set({
+        frozenMicros: Math.max(0, task.frozenMicros - unitPrice),
+        updatedAt: new Date(),
+      })
+      .where(eq(tasks.id, task.id));
+  });
 
   await applyReferralRewards({
     inviteeId: join.earnerId,
-    commissionCents,
-    platformFeeCents,
+    commissionMicros,
+    platformFeeMicros,
     taskId: task.id,
     joinId: join.id,
   });
 
   await settlePublishFeeReferral({
     publisherId: task.publisherId,
-    platformFeeCents,
+    platformFeeMicros,
     taskId: task.id,
     joinId: join.id,
   });
@@ -403,7 +866,7 @@ export async function approveJoin(input: {
     payload: { joinId: join.id, taskId: task.id },
   });
 
-  return { joinId: join.id, commissionCents, platformFeeCents };
+  return { joinId: join.id, commissionMicros, platformFeeMicros };
 }
 
 export async function rejectJoin(input: {
@@ -465,47 +928,4 @@ export async function rejectJoin(input: {
     body: input.reason,
     payload: { joinId: join.id, taskId: task.id },
   });
-}
-
-export async function creditDeposit(userId: string, amountCents: number) {
-  return creditAvailable({
-    userId,
-    amountCents,
-    type: LedgerType.deposit,
-    note: "deposit confirmed",
-  });
-}
-
-export async function debitForWithdraw(userId: string, amountCents: number) {
-  const db = getDb();
-  const [updated] = await db
-    .update(walletAccounts)
-    .set({
-      availableCents: sql`${walletAccounts.availableCents} - ${amountCents}`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(walletAccounts.userId, userId),
-        sql`${walletAccounts.availableCents} >= ${amountCents}`,
-      ),
-    )
-    .returning();
-
-  if (!updated) {
-    throw new AppError(
-      ErrorCode.INSUFFICIENT_BALANCE,
-      "Insufficient available balance",
-      400,
-    );
-  }
-
-  await db.insert(walletLedgers).values({
-    userId,
-    type: LedgerType.withdraw,
-    amountCents: -amountCents,
-    balanceAfterCents: updated.availableCents,
-  });
-
-  return updated;
 }

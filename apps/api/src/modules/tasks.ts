@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { joins, tasks, users } from "@xs-share/db";
 import {
@@ -29,7 +29,7 @@ function publicTask(task: typeof tasks.$inferSelect, publisherName?: string) {
     description: task.description,
     type: task.type,
     targetUrl: task.targetUrl,
-    unitPriceCents: task.unitPriceCents,
+    unitPriceMicros: task.unitPriceMicros,
     currency: task.currency,
     totalQuota: task.totalQuota,
     remainingQuota: task.remainingQuota,
@@ -54,38 +54,55 @@ export function publicModule(_config: AppConfig) {
       const db = getDb();
       const statusFilter = [TaskStatus.recruiting, TaskStatus.full];
       const sort = query.sort ?? "newest";
+      const limit = Math.min(Math.max(Number(query.limit ?? 20) || 20, 1), 100);
+      const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+
+      const conditions = [inArray(tasks.status, statusFilter)];
+
+      if (query.type && taskTypeValues.includes(query.type as TaskType)) {
+        conditions.push(eq(tasks.type, query.type));
+      }
+
+      if (query.minPrice !== undefined && query.minPrice !== "") {
+        const minPriceMicros = Number(query.minPrice);
+        if (Number.isFinite(minPriceMicros) && minPriceMicros >= 0) {
+          conditions.push(gte(tasks.unitPriceMicros, Math.floor(minPriceMicros)));
+        }
+      }
+
+      if (query.languageTag) {
+        conditions.push(eq(tasks.languageTag, query.languageTag));
+      }
+
+      const whereClause = and(...conditions);
       const orderBy =
         sort === "price"
-          ? [desc(tasks.unitPriceCents)]
+          ? [desc(tasks.unitPriceMicros)]
           : sort === "deadline"
             ? [sql`${tasks.endsAt} asc nulls last`]
             : [desc(tasks.createdAt)];
 
+      const [totalRow] = await db
+        .select({ value: count() })
+        .from(tasks)
+        .where(whereClause);
+
       const rows = await db.query.tasks.findMany({
-        where: inArray(tasks.status, statusFilter),
+        where: whereClause,
         orderBy,
-        limit: Math.min(Number(query.limit ?? 50), 100),
+        limit,
+        offset,
       });
 
-      const filtered = rows.filter((task) => {
-        if (query.type && task.type !== query.type) return false;
-        if (query.minPrice && task.unitPriceCents < Number(query.minPrice)) {
-          return false;
-        }
-        if (query.languageTag && task.languageTag !== query.languageTag) {
-          return false;
-        }
-        return true;
-      });
-
-      if (filtered.length === 0) {
-        return { items: [] };
+      const total = totalRow?.value ?? 0;
+      if (rows.length === 0) {
+        return { items: [], total, limit, offset };
       }
 
       const publishers = await db.query.users.findMany({
         where: inArray(
           users.id,
-          filtered.map((task) => task.publisherId),
+          [...new Set(rows.map((task) => task.publisherId))],
         ),
       });
       const nameById = new Map(
@@ -93,9 +110,12 @@ export function publicModule(_config: AppConfig) {
       );
 
       return {
-        items: filtered.map((task) =>
+        items: rows.map((task) =>
           publicTask(task, nameById.get(task.publisherId)),
         ),
+        total,
+        limit,
+        offset,
       };
     },
     {
@@ -105,6 +125,7 @@ export function publicModule(_config: AppConfig) {
         languageTag: t.Optional(t.String()),
         sort: t.Optional(t.String()),
         limit: t.Optional(t.String()),
+        offset: t.Optional(t.String()),
       }),
     },
   )
@@ -164,7 +185,7 @@ export function tasksModule(config: AppConfig) {
         ["recruiting", "full", "paused"].includes(row.status),
       ).length,
       pendingReviews: submissionRows.length,
-      frozenCents: rows.reduce((sum, row) => sum + row.frozenCents, 0),
+      frozenMicros: rows.reduce((sum, row) => sum + row.frozenMicros, 0),
     };
   })
   .get("/", async ({ request, query }) => {
@@ -188,7 +209,7 @@ export function tasksModule(config: AppConfig) {
       if (!taskTypeValues.includes(body.type as (typeof TaskType)[keyof typeof TaskType])) {
         throw validation("Invalid task type");
       }
-      if (body.unitPriceCents <= 0 || body.totalQuota <= 0) {
+      if (body.unitPriceMicros <= 0 || body.totalQuota <= 0) {
         throw validation("Price and quota must be positive");
       }
 
@@ -201,7 +222,7 @@ export function tasksModule(config: AppConfig) {
           description: body.description ?? "",
           type: body.type,
           targetUrl: body.targetUrl,
-          unitPriceCents: body.unitPriceCents,
+          unitPriceMicros: body.unitPriceMicros,
           totalQuota: body.totalQuota,
           remainingQuota: body.totalQuota,
           status: body.publish ? TaskStatus.draft : TaskStatus.draft,
@@ -216,12 +237,12 @@ export function tasksModule(config: AppConfig) {
 
       if (body.publish) {
         const settings = await getPlatformSettings();
-        const base = body.unitPriceCents * body.totalQuota;
+        const base = body.unitPriceMicros * body.totalQuota;
         const fee = bpsAmount(base, settings.platformFeeRateBps);
         await freezeForTaskPublish({
           publisherId: current.id,
           taskId: task.id,
-          amountCents: base + fee,
+          amountMicros: base + fee,
         });
         const updated = await db.query.tasks.findFirst({
           where: eq(tasks.id, task.id),
@@ -237,7 +258,7 @@ export function tasksModule(config: AppConfig) {
         description: t.Optional(t.String()),
         type: t.String(),
         targetUrl: t.Optional(t.String()),
-        unitPriceCents: t.Number(),
+        unitPriceMicros: t.Number(),
         totalQuota: t.Number(),
         languageTag: t.Optional(t.String()),
         submitDeadlineHours: t.Optional(t.Number()),
@@ -262,12 +283,12 @@ export function tasksModule(config: AppConfig) {
       if (task.status !== TaskStatus.draft) throw conflict("Task not draft");
 
       const settings = await getPlatformSettings();
-      const base = task.unitPriceCents * task.totalQuota;
+      const base = task.unitPriceMicros * task.totalQuota;
       const fee = bpsAmount(base, settings.platformFeeRateBps);
       await freezeForTaskPublish({
         publisherId: current.id,
         taskId: task.id,
-        amountCents: base + fee,
+        amountMicros: base + fee,
       });
       const updated = await db.query.tasks.findFirst({
         where: eq(tasks.id, task.id),

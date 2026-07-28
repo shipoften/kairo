@@ -14,13 +14,46 @@ import {
   walletModule,
 } from "./modules/wallet";
 
+function readAppError(error: unknown): {
+  status: number;
+  body: { code: string; message: string; messageKey: string };
+} | null {
+  if (error instanceof AppError) {
+    return { status: error.status, body: error.toBody() };
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: string }).name === "AppError" &&
+    typeof (error as { status?: unknown }).status === "number" &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string" &&
+    typeof (error as { messageKey?: unknown }).messageKey === "string"
+  ) {
+    const appError = error as AppError;
+    return { status: appError.status, body: appError.toBody() };
+  }
+  return null;
+}
+
 export function createApp(config: AppConfig = loadConfig()) {
   const app = new Elysia()
-    .onError(({ error, set }) => {
-      if (error instanceof AppError) {
-        set.status = error.status;
-        return error.toBody();
+    .onError(({ error, set, code }) => {
+      const appError = readAppError(error);
+      if (appError) {
+        set.status = appError.status;
+        return appError.body;
       }
+
+      if (code === "NOT_FOUND") {
+        set.status = 404;
+        return {
+          code: ErrorCode.NOT_FOUND,
+          message: "Not found",
+          messageKey: "errors.not_found",
+        };
+      }
+
       console.error(error);
       set.status = 500;
       return {

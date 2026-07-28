@@ -18,7 +18,7 @@ export default async function PublishPage({
   const summary = await apiServerWithSession<{
     activeTasks: number;
     pendingReviews: number;
-    frozenCents: number;
+    frozenMicros: number;
   }>("/v1/tasks/summary");
 
   return (
@@ -42,7 +42,7 @@ export default async function PublishPage({
         <div className="rounded-2xl border border-line bg-surface p-5">
           <p className="text-sm text-muted">{t("frozenBudget")}</p>
           <p className="mt-2 text-3xl">
-            {((summary?.frozenCents ?? 0) / 100).toFixed(2)}
+            {((summary?.frozenMicros ?? 0) / 1_000_000).toFixed(2)}
           </p>
         </div>
       </div>

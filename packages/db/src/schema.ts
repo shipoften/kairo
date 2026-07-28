@@ -104,8 +104,8 @@ export const tasks = pgTable(
     description: text("description").notNull().default(""),
     type: varchar("type", { length: 32 }).notNull(),
     targetUrl: text("target_url"),
-    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
-    currency: varchar("currency", { length: 8 }).notNull().default("USD"),
+    unitPriceMicros: bigint("unit_price_micros", { mode: "number" }).notNull(),
+    currency: varchar("currency", { length: 8 }).notNull().default("USDT"),
     totalQuota: integer("total_quota").notNull(),
     remainingQuota: integer("remaining_quota").notNull(),
     status: varchar("status", { length: 32 }).notNull().default("draft"),
@@ -114,7 +114,7 @@ export const tasks = pgTable(
     reviewDeadlineHours: integer("review_deadline_hours").notNull().default(72),
     allowResubmit: boolean("allow_resubmit").notNull().default(true),
     proofSchema: jsonb("proof_schema").notNull().default({}),
-    frozenCents: bigint("frozen_cents", { mode: "number" }).notNull().default(0),
+    frozenMicros: bigint("frozen_micros", { mode: "number" }).notNull().default(0),
     endsAt: timestamp("ends_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -168,10 +168,10 @@ export const walletAccounts = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" })
       .unique(),
-    availableCents: bigint("available_cents", { mode: "number" })
+    availableMicros: bigint("available_micros", { mode: "number" })
       .notNull()
       .default(0),
-    frozenCents: bigint("frozen_cents", { mode: "number" })
+    frozenMicros: bigint("frozen_micros", { mode: "number" })
       .notNull()
       .default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -189,11 +189,14 @@ export const walletLedgers = pgTable(
       .notNull()
       .references(() => users.id),
     type: varchar("type", { length: 32 }).notNull(),
-    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
-    balanceAfterCents: bigint("balance_after_cents", { mode: "number" }).notNull(),
+    amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
+    balanceAfterMicros: bigint("balance_after_micros", { mode: "number" }).notNull(),
     taskId: uuid("task_id"),
     joinId: uuid("join_id"),
     relatedUserId: uuid("related_user_id"),
+    depositId: uuid("deposit_id"),
+    withdrawalId: uuid("withdrawal_id"),
+    txHash: varchar("tx_hash", { length: 128 }),
     note: text("note"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -216,8 +219,8 @@ export const walletHolds = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
-    remainingCents: bigint("remaining_cents", { mode: "number" }).notNull(),
+    amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
+    remainingMicros: bigint("remaining_micros", { mode: "number" }).notNull(),
     status: varchar("status", { length: 32 }).notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -229,6 +232,27 @@ export const walletHolds = pgTable(
   (table) => [index("wallet_holds_user_idx").on(table.userId)],
 );
 
+export const depositAddresses = pgTable(
+  "deposit_addresses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" })
+      .unique(),
+    chain: varchar("chain", { length: 16 }).notNull().default("trc20"),
+    address: varchar("address", { length: 64 }).notNull(),
+    derivationIndex: integer("derivation_index").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("deposit_addresses_address_uidx").on(table.address),
+    index("deposit_addresses_user_idx").on(table.userId),
+  ],
+);
+
 export const deposits = pgTable(
   "deposits",
   {
@@ -236,16 +260,24 @@ export const deposits = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
-    status: varchar("status", { length: 32 }).notNull().default("pending"),
+    chain: varchar("chain", { length: 16 }).notNull().default("trc20"),
+    address: varchar("address", { length: 64 }).notNull(),
+    txHash: varchar("tx_hash", { length: 128 }).notNull(),
+    fromAddress: varchar("from_address", { length: 64 }),
+    amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
+    confirmations: integer("confirmations").notNull().default(0),
+    requiredConfirmations: integer("required_confirmations").notNull().default(20),
+    status: varchar("status", { length: 32 }).notNull().default("detecting"),
     note: text("note"),
-    reviewedByUserId: uuid("reviewed_by_user_id"),
-    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    creditedAt: timestamp("credited_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
-  (table) => [index("deposits_user_idx").on(table.userId)],
+  (table) => [
+    index("deposits_user_idx").on(table.userId),
+    uniqueIndex("deposits_tx_hash_uidx").on(table.txHash),
+  ],
 );
 
 export const withdrawals = pgTable(
@@ -255,8 +287,12 @@ export const withdrawals = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
-    payoutInfo: text("payout_info").notNull(),
+    chain: varchar("chain", { length: 16 }).notNull().default("trc20"),
+    toAddress: varchar("to_address", { length: 64 }).notNull(),
+    amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
+    networkFeeMicros: bigint("network_fee_micros", { mode: "number" }).notNull(),
+    netPayoutMicros: bigint("net_payout_micros", { mode: "number" }).notNull(),
+    txHash: varchar("tx_hash", { length: 128 }),
     status: varchar("status", { length: 32 }).notNull().default("pending"),
     note: text("note"),
     reviewedByUserId: uuid("reviewed_by_user_id"),
@@ -320,7 +356,7 @@ export const referralRewards = pgTable(
       .notNull()
       .references(() => users.id),
     trigger: varchar("trigger", { length: 32 }).notNull(),
-    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    amountMicros: bigint("amount_micros", { mode: "number" }).notNull(),
     joinId: uuid("join_id"),
     taskId: uuid("task_id"),
     ledgerId: uuid("ledger_id"),
@@ -344,6 +380,7 @@ export const schema = {
   walletAccounts,
   walletLedgers,
   walletHolds,
+  depositAddresses,
   deposits,
   withdrawals,
   disputes,

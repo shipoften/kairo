@@ -15,6 +15,7 @@ const expectedTables = [
   "wallet_accounts",
   "wallet_ledgers",
   "wallet_holds",
+  "deposit_addresses",
   "deposits",
   "withdrawals",
   "disputes",

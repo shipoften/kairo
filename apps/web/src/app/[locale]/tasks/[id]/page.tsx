@@ -1,6 +1,7 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { TaskType } from "@xs-share/shared";
 import { ButtonLink } from "@/components/ui/button-link";
 import { buildLoginPath } from "@/lib/login-redirect";
 import { Link } from "@/i18n/navigation";
@@ -16,7 +17,7 @@ type TaskDetail = {
   description: string;
   type: string;
   targetUrl: string | null;
-  unitPriceCents: number;
+  unitPriceMicros: number;
   currency: string;
   remainingQuota: number;
   publisherName: string | null;
@@ -67,11 +68,15 @@ export default async function TaskDetailPage({
         ← {t("title")}
       </Link>
       <div className="space-y-3">
-        <p className="text-sm uppercase tracking-wide text-accent">{task.type}</p>
+        <p className="text-sm text-accent">
+          {Object.values(TaskType).includes(task.type as TaskType)
+            ? t(`types.${task.type as TaskType}`)
+            : task.type}
+        </p>
         <h1 className="font-[family-name:var(--font-display)] text-4xl">{task.title}</h1>
         <p className="text-muted">{task.description}</p>
         <p className="text-sm">
-          {t("price")}: {(task.unitPriceCents / 100).toFixed(2)} {task.currency} ·{" "}
+          {t("price")}: {(task.unitPriceMicros / 1_000_000).toFixed(2)} {task.currency} ·{" "}
           {t("quota")}: {task.remainingQuota} · {task.languageTag}
         </p>
         <p className="text-sm text-muted">

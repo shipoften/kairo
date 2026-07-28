@@ -28,12 +28,28 @@ export default async function AdminPage({
   const [config, depositData, withdrawalData, userData, taskData, disputeData] =
     await Promise.all([
       apiServerWithSession<Config>("/v1/admin/config"),
-      apiServerWithSession<{ items: Array<{ id: string; amountCents: number; status: string }> }>(
-        "/v1/admin/deposits",
-      ),
-      apiServerWithSession<{ items: Array<{ id: string; amountCents: number; status: string }> }>(
-        "/v1/admin/withdrawals",
-      ),
+      apiServerWithSession<{
+        items: Array<{
+          id: string;
+          userId: string;
+          amountMicros: number;
+          status: string;
+          txHash: string;
+          address: string;
+        }>;
+      }>("/v1/admin/deposits"),
+      apiServerWithSession<{
+        items: Array<{
+          id: string;
+          userId: string;
+          amountMicros: number;
+          networkFeeMicros: number;
+          netPayoutMicros: number;
+          toAddress: string;
+          status: string;
+          txHash: string | null;
+        }>;
+      }>("/v1/admin/withdrawals"),
       apiServerWithSession<{ items: Array<{ id: string; displayName: string; role: string; bannedAt: string | null }> }>(
         "/v1/admin/users",
       ),
@@ -60,6 +76,7 @@ export default async function AdminPage({
           users: userData.items,
           tasks: taskData.items,
           disputes: disputeData.items,
+          currentUserId: me.id,
         }}
       />
     </main>

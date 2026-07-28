@@ -93,14 +93,14 @@ bun run db:setup
 # Step by step
 bun run db:ensure    # CREATE DATABASE xs_share (skipped if exists)
 bun run db:migrate   # drizzle-kit migrate
-bun run db:verify    # Verify 14 tables + migration history
+bun run db:verify    # Verify 15 tables + migration history
 
 # After schema changes
 bun run db:generate  # Generate migration from packages/db/src/schema.ts
 bun run db:migrate
 ```
 
-Current migration: `packages/db/drizzle/0000_lazy_zaran.sql` (14 tables). If `drizzle-kit generate` prints `No schema changes`, the schema and database are in sync.
+Current migration: `packages/db/drizzle/0000_lovely_morlun.sql` (15 tables). If `drizzle-kit generate` prints `No schema changes`, the schema and database are in sync.
 
 Open Drizzle Studio:
 
@@ -164,7 +164,7 @@ End-to-end path covered by the current implementation:
 
 ```
 Sign in (Dev Login / OAuth)
-  -> Top up (admin confirmation)
+  -> Top up (TRC20 unique address; mock adapter or admin simulate in local)
   -> Post task (balance frozen)
   -> Second account applies and submits proof
   -> Review and settle

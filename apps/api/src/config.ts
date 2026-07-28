@@ -20,6 +20,7 @@ const envSchema = z.object({
   X_CLIENT_ID: z.string().optional(),
   X_CLIENT_SECRET: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
+  CHAIN_ADAPTER: z.enum(["mock", "tron"]).optional().default("mock"),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {
@@ -43,6 +44,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     X_CLIENT_ID: env.X_CLIENT_ID,
     X_CLIENT_SECRET: env.X_CLIENT_SECRET,
     TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN,
+    CHAIN_ADAPTER: env.CHAIN_ADAPTER,
   });
 
   if (!parsed.success) {

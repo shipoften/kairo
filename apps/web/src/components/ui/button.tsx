@@ -15,18 +15,19 @@ export type ButtonStyleProps = {
   loading?: boolean;
 };
 
-const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-accent text-white hover:bg-accent/90",
-  secondary: "border border-line bg-surface hover:border-accent",
-  ghost: "text-muted hover:bg-background hover:text-foreground",
-  link: "h-auto min-h-0 rounded-md px-0 py-0 font-normal text-accent hover:text-accent/80",
-  danger: "bg-red-600 text-white hover:bg-red-700",
+const variantClasses: Record<Exclude<ButtonVariant, "link">, string> = {
+  primary: "border border-transparent bg-accent text-white hover:bg-accent/90",
+  secondary:
+    "border border-line bg-background text-foreground hover:border-accent hover:bg-surface",
+  ghost:
+    "border border-transparent text-muted hover:bg-background hover:text-foreground",
+  danger: "border border-transparent bg-red-600 text-white hover:bg-red-700",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
-  xs: "px-3 py-1.5 text-xs",
-  sm: "px-4 py-2 text-sm",
-  md: "px-5 py-2.5 text-sm",
+  xs: "min-h-8 px-3 py-1.5 text-xs",
+  sm: "min-h-9 px-4 py-2 text-sm",
+  md: "min-h-10 px-5 py-2.5 text-sm",
 };
 
 const linkSizeClasses: Record<ButtonSize, string> = {
@@ -55,14 +56,23 @@ export function buttonClassName({
 }: ButtonStyleProps & {
   className?: string;
 } = {}) {
-  const isLink = variant === "link";
+  if (variant === "link") {
+    return cn(
+      "inline-flex items-center justify-center gap-1.5 font-normal leading-none text-accent transition hover:text-accent/80",
+      "focus-visible:outline-none focus-visible:underline",
+      "disabled:pointer-events-none disabled:opacity-50",
+      linkSizeClasses[size],
+      fullWidth && "w-full",
+      className,
+    );
+  }
 
   return cn(
-    "inline-flex items-center justify-center gap-2 rounded-full font-medium transition",
-    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:ring-offset-2",
+    "inline-flex items-center justify-center gap-2 rounded-xl font-medium leading-none transition",
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
     "disabled:pointer-events-none disabled:opacity-50",
-    !isLink && "active:scale-[0.98]",
-    isLink ? linkSizeClasses[size] : sizeClasses[size],
+    "active:scale-[0.98]",
+    sizeClasses[size],
     variantClasses[variant],
     fullWidth && "w-full",
     className,

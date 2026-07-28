@@ -7,14 +7,29 @@ CREATE TABLE "auth_identities" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "deposit_addresses" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"chain" varchar(16) DEFAULT 'trc20' NOT NULL,
+	"address" varchar(64) NOT NULL,
+	"derivation_index" integer DEFAULT 0 NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "deposit_addresses_user_id_unique" UNIQUE("user_id")
+);
+--> statement-breakpoint
 CREATE TABLE "deposits" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
-	"amount_cents" bigint NOT NULL,
-	"status" varchar(32) DEFAULT 'pending' NOT NULL,
+	"chain" varchar(16) DEFAULT 'trc20' NOT NULL,
+	"address" varchar(64) NOT NULL,
+	"tx_hash" varchar(128) NOT NULL,
+	"from_address" varchar(64),
+	"amount_micros" bigint NOT NULL,
+	"confirmations" integer DEFAULT 0 NOT NULL,
+	"required_confirmations" integer DEFAULT 20 NOT NULL,
+	"status" varchar(32) DEFAULT 'detecting' NOT NULL,
 	"note" text,
-	"reviewed_by_user_id" uuid,
-	"reviewed_at" timestamp with time zone,
+	"credited_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -69,7 +84,7 @@ CREATE TABLE "referral_rewards" (
 	"inviter_id" uuid NOT NULL,
 	"invitee_id" uuid NOT NULL,
 	"trigger" varchar(32) NOT NULL,
-	"amount_cents" bigint NOT NULL,
+	"amount_micros" bigint NOT NULL,
 	"join_id" uuid,
 	"task_id" uuid,
 	"ledger_id" uuid,
@@ -91,8 +106,8 @@ CREATE TABLE "tasks" (
 	"description" text DEFAULT '' NOT NULL,
 	"type" varchar(32) NOT NULL,
 	"target_url" text,
-	"unit_price_cents" bigint NOT NULL,
-	"currency" varchar(8) DEFAULT 'USD' NOT NULL,
+	"unit_price_micros" bigint NOT NULL,
+	"currency" varchar(8) DEFAULT 'USDT' NOT NULL,
 	"total_quota" integer NOT NULL,
 	"remaining_quota" integer NOT NULL,
 	"status" varchar(32) DEFAULT 'draft' NOT NULL,
@@ -101,7 +116,7 @@ CREATE TABLE "tasks" (
 	"review_deadline_hours" integer DEFAULT 72 NOT NULL,
 	"allow_resubmit" boolean DEFAULT true NOT NULL,
 	"proof_schema" jsonb DEFAULT '{}'::jsonb NOT NULL,
-	"frozen_cents" bigint DEFAULT 0 NOT NULL,
+	"frozen_micros" bigint DEFAULT 0 NOT NULL,
 	"ends_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -125,8 +140,8 @@ CREATE TABLE "users" (
 CREATE TABLE "wallet_accounts" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
-	"available_cents" bigint DEFAULT 0 NOT NULL,
-	"frozen_cents" bigint DEFAULT 0 NOT NULL,
+	"available_micros" bigint DEFAULT 0 NOT NULL,
+	"frozen_micros" bigint DEFAULT 0 NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "wallet_accounts_user_id_unique" UNIQUE("user_id")
 );
@@ -135,8 +150,8 @@ CREATE TABLE "wallet_holds" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"task_id" uuid NOT NULL,
 	"user_id" uuid NOT NULL,
-	"amount_cents" bigint NOT NULL,
-	"remaining_cents" bigint NOT NULL,
+	"amount_micros" bigint NOT NULL,
+	"remaining_micros" bigint NOT NULL,
 	"status" varchar(32) DEFAULT 'active' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -147,11 +162,14 @@ CREATE TABLE "wallet_ledgers" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
 	"type" varchar(32) NOT NULL,
-	"amount_cents" bigint NOT NULL,
-	"balance_after_cents" bigint NOT NULL,
+	"amount_micros" bigint NOT NULL,
+	"balance_after_micros" bigint NOT NULL,
 	"task_id" uuid,
 	"join_id" uuid,
 	"related_user_id" uuid,
+	"deposit_id" uuid,
+	"withdrawal_id" uuid,
+	"tx_hash" varchar(128),
 	"note" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -159,8 +177,12 @@ CREATE TABLE "wallet_ledgers" (
 CREATE TABLE "withdrawals" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
-	"amount_cents" bigint NOT NULL,
-	"payout_info" text NOT NULL,
+	"chain" varchar(16) DEFAULT 'trc20' NOT NULL,
+	"to_address" varchar(64) NOT NULL,
+	"amount_micros" bigint NOT NULL,
+	"network_fee_micros" bigint NOT NULL,
+	"net_payout_micros" bigint NOT NULL,
+	"tx_hash" varchar(128),
 	"status" varchar(32) DEFAULT 'pending' NOT NULL,
 	"note" text,
 	"reviewed_by_user_id" uuid,
@@ -169,6 +191,7 @@ CREATE TABLE "withdrawals" (
 );
 --> statement-breakpoint
 ALTER TABLE "auth_identities" ADD CONSTRAINT "auth_identities_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit_addresses" ADD CONSTRAINT "deposit_addresses_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposits" ADD CONSTRAINT "deposits_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "disputes" ADD CONSTRAINT "disputes_join_id_joins_id_fk" FOREIGN KEY ("join_id") REFERENCES "public"."joins"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "disputes" ADD CONSTRAINT "disputes_opened_by_user_id_users_id_fk" FOREIGN KEY ("opened_by_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -186,7 +209,10 @@ ALTER TABLE "wallet_ledgers" ADD CONSTRAINT "wallet_ledgers_user_id_users_id_fk"
 ALTER TABLE "withdrawals" ADD CONSTRAINT "withdrawals_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "auth_identities_provider_uidx" ON "auth_identities" USING btree ("provider","provider_user_id");--> statement-breakpoint
 CREATE INDEX "auth_identities_user_idx" ON "auth_identities" USING btree ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "deposit_addresses_address_uidx" ON "deposit_addresses" USING btree ("address");--> statement-breakpoint
+CREATE INDEX "deposit_addresses_user_idx" ON "deposit_addresses" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "deposits_user_idx" ON "deposits" USING btree ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "deposits_tx_hash_uidx" ON "deposits" USING btree ("tx_hash");--> statement-breakpoint
 CREATE INDEX "disputes_join_idx" ON "disputes" USING btree ("join_id");--> statement-breakpoint
 CREATE INDEX "joins_task_idx" ON "joins" USING btree ("task_id");--> statement-breakpoint
 CREATE INDEX "joins_earner_idx" ON "joins" USING btree ("earner_id");--> statement-breakpoint

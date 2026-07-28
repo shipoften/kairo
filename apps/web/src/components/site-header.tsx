@@ -167,7 +167,7 @@ export function SiteHeader({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="rounded-full px-2.5 text-muted"
+                className="px-2.5 text-muted"
                 onClick={logout}
               >
                 <Icon icon={Logout01Icon} size={16} />

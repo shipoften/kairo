@@ -16,6 +16,7 @@
     "@xs-share/shared": "workspace:*",
     "next": "16.2.12",
     "next-intl": "^4.13.4",
+    "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -23,6 +24,7 @@
     "@playwright/test": "^1.62.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^20.19.43",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "babel-plugin-react-compiler": "1.0.0",

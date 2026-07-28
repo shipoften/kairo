@@ -1,5 +1,7 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { redirect } from "next/navigation";
+import { Notification01Icon } from "@hugeicons/core-free-icons";
+import { Empty } from "@/components/ui/empty";
 import { buildLoginRedirect } from "@/lib/login-redirect";
 import { apiServerWithSession } from "@/lib/session";
 import { MarkReadButton } from "@/components/mark-read-button";
@@ -28,9 +30,11 @@ export default async function NotificationsPage({
 
   return (
     <main className="space-y-6">
-      <h1 className="font-[family-name:var(--font-display)] text-3xl">{t("title")}</h1>
+      <h1 className="font-[family-name:var(--font-display)] text-3xl">
+        {t("title")}
+      </h1>
       {data.items.length === 0 ? (
-        <p className="text-muted">{t("empty")}</p>
+        <Empty icon={Notification01Icon} title={t("empty")} />
       ) : (
         <ul className="space-y-2">
           {data.items.map((item) => (
@@ -47,7 +51,10 @@ export default async function NotificationsPage({
                   </p>
                 </div>
                 {!item.readAt ? (
-                  <MarkReadButton notificationId={item.id} label={t("markRead")} />
+                  <MarkReadButton
+                    notificationId={item.id}
+                    label={t("markRead")}
+                  />
                 ) : null}
               </div>
             </li>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { apiFetch } from "@/lib/api";
+import { displayUsdt } from "@/lib/money";
 
 type Config = {
   platformFeeRateBps: number;
@@ -13,18 +14,46 @@ type Config = {
   referralPublishRateBps: number;
 };
 
+type DepositRow = {
+  id: string;
+  userId: string;
+  amountMicros: number;
+  status: string;
+  txHash: string;
+  address: string;
+};
+
+type WithdrawalRow = {
+  id: string;
+  userId: string;
+  amountMicros: number;
+  networkFeeMicros: number;
+  netPayoutMicros: number;
+  toAddress: string;
+  status: string;
+  txHash: string | null;
+};
+
 type AdminData = {
   config: Config;
-  deposits: Array<{ id: string; amountCents: number; status: string }>;
-  withdrawals: Array<{ id: string; amountCents: number; status: string }>;
-  users: Array<{ id: string; displayName: string; role: string; bannedAt: string | null }>;
+  deposits: DepositRow[];
+  withdrawals: WithdrawalRow[];
+  users: Array<{
+    id: string;
+    displayName: string;
+    role: string;
+    bannedAt: string | null;
+  }>;
   tasks: Array<{ id: string; title: string; status: string }>;
   disputes: Array<{ id: string; status: string; reason: string }>;
+  currentUserId: string;
 };
 
 export function AdminActions({ data }: { data: AdminData }) {
   const t = useTranslations("admin");
   const router = useRouter();
+  const [simulateUserId, setSimulateUserId] = useState(data.currentUserId);
+  const [simulateAmount, setSimulateAmount] = useState(50);
 
   async function refresh() {
     router.refresh();
@@ -38,9 +67,33 @@ export function AdminActions({ data }: { data: AdminData }) {
     await refresh();
   }
 
-  async function confirmAction(path: string, message: string) {
+  async function confirmAction(path: string, message: string, body?: unknown) {
     if (!confirm(message)) return;
-    await apiFetch(path, { method: "POST" });
+    await apiFetch(path, {
+      method: "POST",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    await refresh();
+  }
+
+  async function markPaid(id: string) {
+    const txHash = window.prompt(t("enterTxHash"));
+    if (!txHash?.trim()) return;
+    await apiFetch(`/v1/admin/withdrawals/${id}/paid`, {
+      method: "POST",
+      body: JSON.stringify({ txHash: txHash.trim() }),
+    });
+    await refresh();
+  }
+
+  async function simulateDeposit() {
+    await apiFetch("/v1/admin/deposits/simulate", {
+      method: "POST",
+      body: JSON.stringify({
+        userId: simulateUserId,
+        amountMicros: Math.round(simulateAmount * 1_000_000),
+      }),
+    });
     await refresh();
   }
 
@@ -51,32 +104,38 @@ export function AdminActions({ data }: { data: AdminData }) {
         <ConfigEditor config={data.config} onSave={saveConfig} />
       </section>
 
+      <section className="space-y-3 rounded-2xl border border-line bg-surface p-5">
+        <h2 className="text-lg font-medium">{t("simulateDeposit")}</h2>
+        <label className="block text-sm">
+          {t("simulateUserId")}
+          <input
+            className="mt-1 w-full rounded-xl border border-line px-3 py-2 font-mono text-sm"
+            value={simulateUserId}
+            onChange={(event) => setSimulateUserId(event.target.value)}
+          />
+        </label>
+        <label className="block text-sm">
+          {t("simulateAmountUsdt")}
+          <input
+            type="number"
+            min={1}
+            step="0.01"
+            className="mt-1 w-full rounded-xl border border-line px-3 py-2"
+            value={simulateAmount}
+            onChange={(event) => setSimulateAmount(Number(event.target.value))}
+          />
+        </label>
+        <Button type="button" size="sm" onClick={simulateDeposit}>
+          {t("simulateDeposit")}
+        </Button>
+      </section>
+
       <AdminList
         title={t("deposits")}
         items={data.deposits.map((item) => ({
           id: item.id,
-          label: `${item.id.slice(0, 8)} · ${item.amountCents} · ${item.status}`,
-          actions:
-            item.status === "pending"
-              ? [
-                  {
-                    label: t("confirm"),
-                    onClick: () =>
-                      confirmAction(
-                        `/v1/admin/deposits/${item.id}/confirm`,
-                        t("confirmDeposit"),
-                      ),
-                  },
-                  {
-                    label: t("reject"),
-                    onClick: () =>
-                      confirmAction(
-                        `/v1/admin/deposits/${item.id}/reject`,
-                        t("rejectDeposit"),
-                      ),
-                  },
-                ]
-              : [],
+          label: `${item.id.slice(0, 8)} · ${displayUsdt(item.amountMicros)} · ${item.status} · ${item.txHash.slice(0, 10)}…`,
+          actions: [],
         }))}
       />
 
@@ -84,17 +143,21 @@ export function AdminActions({ data }: { data: AdminData }) {
         title={t("withdrawals")}
         items={data.withdrawals.map((item) => ({
           id: item.id,
-          label: `${item.id.slice(0, 8)} · ${item.amountCents} · ${item.status}`,
+          label: `${item.id.slice(0, 8)} · ${displayUsdt(item.amountMicros)} → ${displayUsdt(item.netPayoutMicros)} · ${item.status} · ${item.toAddress.slice(0, 10)}…`,
           actions:
             item.status === "pending"
               ? [
                   {
-                    label: t("markPaid"),
+                    label: t("approve"),
                     onClick: () =>
                       confirmAction(
-                        `/v1/admin/withdrawals/${item.id}/paid`,
-                        t("confirmPaid"),
+                        `/v1/admin/withdrawals/${item.id}/approve`,
+                        t("confirmApprove"),
                       ),
+                  },
+                  {
+                    label: t("markPaid"),
+                    onClick: () => markPaid(item.id),
                   },
                   {
                     label: t("reject"),
@@ -105,7 +168,22 @@ export function AdminActions({ data }: { data: AdminData }) {
                       ),
                   },
                 ]
-              : [],
+              : item.status === "approved"
+                ? [
+                    {
+                      label: t("markPaid"),
+                      onClick: () => markPaid(item.id),
+                    },
+                    {
+                      label: t("reject"),
+                      onClick: () =>
+                        confirmAction(
+                          `/v1/admin/withdrawals/${item.id}/reject`,
+                          t("rejectWithdrawal"),
+                        ),
+                    },
+                  ]
+                : [],
         }))}
       />
 
@@ -140,14 +218,20 @@ export function AdminActions({ data }: { data: AdminData }) {
                 {
                   label: t("unban"),
                   onClick: () =>
-                    confirmAction(`/v1/admin/users/${item.id}/unban`, t("confirmUnban")),
+                    confirmAction(
+                      `/v1/admin/users/${item.id}/unban`,
+                      t("confirmUnban"),
+                    ),
                 },
               ]
             : [
                 {
                   label: t("ban"),
                   onClick: () =>
-                    confirmAction(`/v1/admin/users/${item.id}/ban`, t("confirmBan")),
+                    confirmAction(
+                      `/v1/admin/users/${item.id}/ban`,
+                      t("confirmBan"),
+                    ),
                 },
               ],
         }))}
@@ -156,7 +240,10 @@ export function AdminActions({ data }: { data: AdminData }) {
       <section className="space-y-3">
         <h2 className="text-lg font-medium">{t("disputes")}</h2>
         {data.disputes.map((item) => (
-          <div key={item.id} className="rounded-xl border border-line bg-surface px-4 py-3 text-sm">
+          <div
+            key={item.id}
+            className="rounded-xl border border-line bg-surface px-4 py-3 text-sm"
+          >
             <p>
               {item.status}: {item.reason}
             </p>
@@ -169,7 +256,10 @@ export function AdminActions({ data }: { data: AdminData }) {
                   onClick={async () => {
                     await apiFetch(`/v1/admin/disputes/${item.id}/resolve`, {
                       method: "POST",
-                      body: JSON.stringify({ decision: "approve", note: "approved" }),
+                      body: JSON.stringify({
+                        decision: "approve",
+                        note: "approved",
+                      }),
                     });
                     await refresh();
                   }}
@@ -183,7 +273,10 @@ export function AdminActions({ data }: { data: AdminData }) {
                   onClick={async () => {
                     await apiFetch(`/v1/admin/disputes/${item.id}/resolve`, {
                       method: "POST",
-                      body: JSON.stringify({ decision: "reject", note: "rejected" }),
+                      body: JSON.stringify({
+                        decision: "reject",
+                        note: "rejected",
+                      }),
                     });
                     await refresh();
                   }}
@@ -218,7 +311,10 @@ function ConfigEditor({
           className="mt-1 w-full rounded-xl border border-line px-3 py-2"
           value={local.platformFeeRateBps}
           onChange={(event) =>
-            setLocal({ ...local, platformFeeRateBps: Number(event.target.value) })
+            setLocal({
+              ...local,
+              platformFeeRateBps: Number(event.target.value),
+            })
           }
         />
       </label>
@@ -258,8 +354,8 @@ function AdminList({
           key={item.id}
           className="flex items-center justify-between rounded-xl border border-line bg-surface px-4 py-3 text-sm"
         >
-          <span>{item.label}</span>
-          <div className="flex gap-2">
+          <span className="pr-3">{item.label}</span>
+          <div className="flex shrink-0 gap-2">
             {item.actions.map((action) => (
               <Button
                 key={action.label}
