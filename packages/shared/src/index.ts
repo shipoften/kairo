@@ -61,6 +61,83 @@ export const TaskType = {
 } as const;
 export type TaskType = (typeof TaskType)[keyof typeof TaskType];
 
+export const ProofField = {
+  proofUrl: "proofUrl",
+  screenshot: "screenshot",
+  note: "note",
+} as const;
+export type ProofField = (typeof ProofField)[keyof typeof ProofField];
+
+export type ProofFieldRequirement = {
+  required: boolean;
+};
+
+export type ProofSchema = Partial<Record<ProofField, ProofFieldRequirement>>;
+
+export const PROOF_TEMPLATES_BY_TASK_TYPE: Record<TaskType, ProofSchema> = {
+  [TaskType.x_follow]: {
+    proofUrl: { required: true },
+    screenshot: { required: true },
+    note: { required: false },
+  },
+  [TaskType.x_like]: {
+    proofUrl: { required: true },
+    screenshot: { required: true },
+    note: { required: false },
+  },
+  [TaskType.x_repost]: {
+    proofUrl: { required: true },
+    screenshot: { required: true },
+    note: { required: false },
+  },
+  [TaskType.x_post]: {
+    proofUrl: { required: true },
+    screenshot: { required: true },
+    note: { required: false },
+  },
+  [TaskType.cpa_register]: {
+    proofUrl: { required: true },
+    note: { required: true },
+  },
+  [TaskType.custom]: {
+    proofUrl: { required: true },
+    note: { required: true },
+    screenshot: { required: false },
+  },
+};
+
+export function isXTaskType(type: string): boolean {
+  return (
+    type === TaskType.x_follow ||
+    type === TaskType.x_like ||
+    type === TaskType.x_repost ||
+    type === TaskType.x_post
+  );
+}
+
+export function proofSchemaForTaskType(type: string): ProofSchema {
+  if (type in PROOF_TEMPLATES_BY_TASK_TYPE) {
+    return PROOF_TEMPLATES_BY_TASK_TYPE[type as TaskType];
+  }
+  return PROOF_TEMPLATES_BY_TASK_TYPE[TaskType.custom];
+}
+
+export const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+export const UPLOAD_ALLOWED_CONTENT_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+export type UploadContentType = (typeof UPLOAD_ALLOWED_CONTENT_TYPES)[number];
+
+export function isAllowedUploadContentType(
+  contentType: string,
+): contentType is UploadContentType {
+  return (UPLOAD_ALLOWED_CONTENT_TYPES as readonly string[]).includes(
+    contentType,
+  );
+}
+
 export const Currency = {
   USDT: "USDT",
 } as const;
@@ -154,6 +231,10 @@ export const ErrorCode = {
   RATE_LIMITED: "RATE_LIMITED",
   SELF_REFERRAL_FORBIDDEN: "SELF_REFERRAL_FORBIDDEN",
   REFERRAL_DISABLED: "REFERRAL_DISABLED",
+  X_BIND_REQUIRED: "X_BIND_REQUIRED",
+  PROOF_INVALID: "PROOF_INVALID",
+  UPLOAD_INVALID: "UPLOAD_INVALID",
+  DUPLICATE_PROOF: "DUPLICATE_PROOF",
   INTERNAL: "INTERNAL",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

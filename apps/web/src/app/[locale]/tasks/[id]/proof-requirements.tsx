@@ -1,17 +1,29 @@
 import { getTranslations } from "next-intl/server";
+import type { ProofSchema } from "@xs-share/shared";
 
-const knownProofFields = ["url", "screenshot", "note"] as const;
+type KnownField = "proofUrl" | "screenshot" | "note";
 
-type ProofField = (typeof knownProofFields)[number];
-
-function resolveProofFields(schema: Record<string, unknown>): ProofField[] {
-  const fields = Object.keys(schema).filter((field): field is ProofField =>
-    knownProofFields.includes(field as ProofField),
-  );
+function resolveProofFields(schema: Record<string, unknown>): KnownField[] {
+  const typed = schema as ProofSchema;
+  const fields: KnownField[] = [];
+  if (typed.proofUrl || schema.url) fields.push("proofUrl");
+  if (typed.screenshot) fields.push("screenshot");
+  if (typed.note) fields.push("note");
   if (fields.length === 0) {
-    return ["url", "note"];
+    return ["proofUrl", "note"];
   }
   return fields;
+}
+
+function isRequired(
+  schema: Record<string, unknown>,
+  field: KnownField,
+): boolean {
+  const typed = schema as ProofSchema;
+  if (field === "proofUrl") {
+    return Boolean(typed.proofUrl?.required ?? schema.url);
+  }
+  return Boolean(typed[field]?.required);
 }
 
 export async function ProofRequirements({
@@ -23,8 +35,8 @@ export async function ProofRequirements({
   const tEarn = await getTranslations("earn");
   const fields = resolveProofFields(schema);
 
-  const fieldLabels: Record<ProofField, string> = {
-    url: tEarn("proofUrl"),
+  const fieldLabels: Record<KnownField, string> = {
+    proofUrl: tEarn("proofUrl"),
     screenshot: tEarn("screenshot"),
     note: tEarn("note"),
   };
@@ -40,7 +52,10 @@ export async function ProofRequirements({
             <span className="text-accent" aria-hidden>
               ·
             </span>
-            <span>{fieldLabels[field]}</span>
+            <span>
+              {fieldLabels[field]}
+              {isRequired(schema, field) ? ` (${t("required")})` : ""}
+            </span>
           </li>
         ))}
       </ul>

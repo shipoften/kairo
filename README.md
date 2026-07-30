@@ -76,9 +76,18 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `OAUTH_CALLBACK_BASE_URL` | OAuth redirect base (e.g. `http://localhost:5181`) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth (optional) |
 | `X_CLIENT_ID` / `X_CLIENT_SECRET` | X OAuth (optional) |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token (optional) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token (OAuth + outbound notifications) |
 | `NEXT_PUBLIC_TELEGRAM_BOT_NAME` | Telegram widget bot username (optional) |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_PUBLIC_BASE_URL` | S3-compatible upload storage (MinIO locally) |
+| `S3_PRESIGN_ENDPOINT` | Optional browser-facing S3 endpoint for presigned PUT (Docker: `http://localhost:9000`) |
+| `S3_REGION` | S3 region (default `us-east-1`) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` | Outbound email (Mailpit locally) |
+| `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` | Optional SMTP TLS and auth |
 | `CHAIN_ADAPTER` | `mock` (default) or `tron` for real TRC20 deposit scanning |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_PUBLIC_BASE_URL` | S3-compatible upload (MinIO locally) |
+| `S3_REGION` | S3 region (default `us-east-1`) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` | Outbound email (Mailpit locally) |
+| `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` | Optional SMTP TLS and auth |
 | `TRON_API_URL` | TronGrid / full-node HTTP base (default `https://api.trongrid.io`) |
 | `TRON_API_KEY` | Optional TronGrid API key |
 | `TRON_USDT_CONTRACT` | USDT TRC20 contract (default mainnet USDT) |
@@ -99,14 +108,14 @@ bun run db:setup
 # Step by step
 bun run db:ensure    # CREATE DATABASE xs_share (skipped if exists)
 bun run db:migrate   # drizzle-kit migrate
-bun run db:verify    # Verify 15 tables + migration history
+bun run db:verify    # Verify 16 tables + migration history
 
 # After schema changes
 bun run db:generate  # Generate migration from packages/db/src/schema.ts
 bun run db:migrate
 ```
 
-Current migration: `packages/db/drizzle/0000_lovely_morlun.sql` (15 tables). If `drizzle-kit generate` prints `No schema changes`, the schema and database are in sync.
+Current migration set: `packages/db/drizzle/` (16 tables including `uploads`). If `drizzle-kit generate` prints `No schema changes`, the schema and database are in sync.
 
 Open Drizzle Studio:
 
@@ -190,6 +199,8 @@ Sign in (Dev Login / OAuth)
 **Frontend data flow:** Server Components for reads, client islands for mutations, `router.refresh()` for updates. No global state library.
 
 See [`docs/07-MVP范围.md`](./docs/07-MVP范围.md) and [`docs/10-功能收口检查表.md`](./docs/10-功能收口检查表.md) for the full acceptance checklist.
+
+Local Docker extras: MinIO (`9000`/`9001`) for uploads, Mailpit (`8025` UI / `1025` SMTP) for email.
 
 ## API Conventions
 

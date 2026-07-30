@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { useRouter } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, type ApiError } from "@/lib/api";
 import { resolveApiErrorMessage } from "@/lib/resolve-api-error";
 
 export function JoinButton({
@@ -24,6 +24,7 @@ export function JoinButton({
   const t = useTranslations("tasks");
   const tCommon = useTranslations("common");
   const [error, setError] = useState<string | null>(null);
+  const [needsXBind, setNeedsXBind] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function join() {
@@ -31,6 +32,7 @@ export function JoinButton({
     if (!confirm(confirmMessage)) return;
     setLoading(true);
     setError(null);
+    setNeedsXBind(false);
     try {
       await apiFetch("/v1/joins", {
         method: "POST",
@@ -39,7 +41,13 @@ export function JoinButton({
       router.push("/earn/joins");
       router.refresh();
     } catch (err) {
-      setError(resolveApiErrorMessage(err, tCommon, t("actionFailed")));
+      const code = (err as ApiError | undefined)?.code;
+      if (code === "X_BIND_REQUIRED") {
+        setNeedsXBind(true);
+        setError(resolveApiErrorMessage(err, tCommon, t("xBindRequired")));
+      } else {
+        setError(resolveApiErrorMessage(err, tCommon, t("actionFailed")));
+      }
     } finally {
       setLoading(false);
     }
@@ -60,6 +68,13 @@ export function JoinButton({
         <p className="text-sm text-muted">{disabledReason}</p>
       ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {needsXBind ? (
+        <p className="text-sm text-muted">
+          <Link href="/settings" className="text-accent underline">
+            {t("bindXInSettings")}
+          </Link>
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -65,6 +65,8 @@ export async function upsertOAuthUser(input: {
   avatarUrl?: string | null;
   inviteCode?: string;
   locale?: string;
+  email?: string | null;
+  telegramChatId?: string | null;
 }): Promise<{ user: AuthUser; isNew: boolean }> {
   const db = getDb();
 
@@ -82,6 +84,23 @@ export async function upsertOAuthUser(input: {
     if (!user) throw unauthorized("User missing for identity");
     if (user.bannedAt) throw forbidden("Account banned");
     await ensureWallet(user.id);
+    const patch: Partial<typeof users.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (input.email && !user.notifyEmail) {
+      patch.notifyEmail = input.email;
+    }
+    if (input.telegramChatId) {
+      patch.telegramChatId = input.telegramChatId;
+    }
+    if (Object.keys(patch).length > 1) {
+      const [updated] = await db
+        .update(users)
+        .set(patch)
+        .where(eq(users.id, user.id))
+        .returning();
+      return { user: updated, isNew: false };
+    }
     return { user, isNew: false };
   }
 
@@ -105,6 +124,8 @@ export async function upsertOAuthUser(input: {
       inviteCode,
       invitedByUserId:
         inviter && !inviter.bannedAt ? inviter.id : null,
+      notifyEmail: input.email ?? null,
+      telegramChatId: input.telegramChatId ?? null,
     })
     .returning();
 
@@ -112,7 +133,7 @@ export async function upsertOAuthUser(input: {
     userId: user.id,
     provider: input.provider,
     providerUserId: input.providerUserId,
-    profileJson: { displayName: input.displayName },
+    profileJson: { displayName: input.displayName, email: input.email ?? null },
   });
 
   await ensureWallet(user.id);

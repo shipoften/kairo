@@ -5,6 +5,7 @@ import { AppError } from "./lib/errors";
 import { authModule } from "./modules/auth";
 import { meModule } from "./modules/me";
 import { joinsModule, publicModule, tasksModule } from "./modules/tasks";
+import { uploadsModule } from "./modules/uploads";
 import {
   adminModule,
   disputesModule,
@@ -93,6 +94,7 @@ export function createApp(config: AppConfig = loadConfig()) {
     })
     .use(authModule(config))
     .use(meModule(config))
+    .use(uploadsModule(config))
     .use(publicModule(config))
     .use(tasksModule(config))
     .use(joinsModule(config))

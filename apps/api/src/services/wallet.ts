@@ -407,7 +407,7 @@ export async function requestWithdraw(input: {
   const netPayoutMicros = input.amountMicros - networkFeeMicros;
   const db = getDb();
 
-  return db.transaction(async (tx) => {
+  const row = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(walletAccounts)
       .set({
@@ -430,7 +430,7 @@ export async function requestWithdraw(input: {
       );
     }
 
-    const [row] = await tx
+    const [created] = await tx
       .insert(withdrawals)
       .values({
         userId: input.userId,
@@ -448,12 +448,22 @@ export async function requestWithdraw(input: {
       type: LedgerType.withdraw,
       amountMicros: -input.amountMicros,
       balanceAfterMicros: updated.availableMicros,
-      withdrawalId: row.id,
+      withdrawalId: created.id,
       note: "withdraw reserved",
     });
 
-    return row;
+    return created;
   });
+
+  await notifyUser({
+    userId: input.userId,
+    type: "withdrawal_requested",
+    title: "Withdrawal requested",
+    body: `Your withdrawal of ${formatUsdt(row.netPayoutMicros)} USDT is pending review.`,
+    payload: { withdrawalId: row.id },
+  });
+
+  return row;
 }
 
 export async function approveWithdraw(input: {
@@ -497,17 +507,17 @@ export async function markWithdrawPaid(input: {
 }) {
   const txHash = input.txHash.trim();
   if (!txHash) throw validation("txHash required");
+  if (!/^[a-zA-Z0-9]{8,128}$/.test(txHash)) {
+    throw validation("txHash format is invalid");
+  }
 
   const db = getDb();
   const row = await db.query.withdrawals.findFirst({
     where: eq(withdrawals.id, input.withdrawalId),
   });
   if (!row) throw notFound("Withdrawal not found");
-  if (
-    row.status !== WithdrawalStatus.pending &&
-    row.status !== WithdrawalStatus.approved
-  ) {
-    throw conflict("Withdrawal not payable");
+  if (row.status !== WithdrawalStatus.approved) {
+    throw conflict("Withdrawal must be approved before marking paid");
   }
 
   const [updated] = await db

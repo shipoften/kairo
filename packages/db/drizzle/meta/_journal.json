@@ -8,6 +8,13 @@
       "when": 1785213607731,
       "tag": "0000_lovely_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785400000000,
+      "tag": "0001_p0_hardening",
+      "breakpoints": true
     }
   ]
 }

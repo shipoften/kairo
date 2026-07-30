@@ -9,6 +9,10 @@ export type MeResponse = {
   preferredMode: string;
   role: string;
   inviteCode: string;
+  notifyEmail: string | null;
+  telegramChatId: string | null;
+  notifyTelegram: boolean;
+  notifyEmailEnabled: boolean;
   identities: Array<{ provider: string; providerUserId: string }>;
 };
 

@@ -12,6 +12,8 @@
     "test": "bun test --env-file=../../.env"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.901.0",
+    "@aws-sdk/s3-request-presigner": "^3.901.0",
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
     "@scure/base": "^2.2.0",
@@ -21,10 +23,12 @@
     "@xs-share/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",
+    "nodemailer": "^7.0.9",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/nodemailer": "^7.0.2",
     "typescript": "^5.9.3"
   }
 }

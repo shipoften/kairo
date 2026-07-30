@@ -1,10 +1,12 @@
 import { createApp } from "./app";
 import { loadConfig } from "./config";
+import { assertProductionGuards } from "./lib/production-guards";
 import { startTimeoutWorker } from "./workers/timeout";
 import { startChainDepositWorker } from "./workers/chain-deposit";
 import { APP_NAME } from "@xs-share/shared";
 
 const config = loadConfig();
+assertProductionGuards(config);
 const app = createApp(config);
 
 if (process.env.DISABLE_WORKERS !== "true") {

@@ -18,6 +18,7 @@ const expectedTables = [
   "deposit_addresses",
   "deposits",
   "withdrawals",
+  "uploads",
   "disputes",
   "notifications",
   "referral_rewards",

@@ -127,28 +127,53 @@ export function SubmissionActions({
                   {new Date(item.submittedAt).toLocaleString()}
                 </p>
               ) : null}
-              <div className="mt-3 space-y-1 text-sm">
+              <div className="mt-3 space-y-2 text-sm">
                 <p className="font-medium">{t("proof")}</p>
                 {lines.length === 0 ? (
                   <p className="text-muted">—</p>
                 ) : (
-                  lines.map((line) => (
-                    <p key={line.label} className="break-all text-muted">
-                      <span className="text-foreground">{line.label}:</span>{" "}
-                      {line.value.startsWith("http") ? (
-                        <a
-                          href={line.value}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-accent underline"
-                        >
-                          {line.value}
-                        </a>
-                      ) : (
-                        line.value
-                      )}
-                    </p>
-                  ))
+                  lines.map((line) => {
+                    const isScreenshot =
+                      line.label === "screenshot" &&
+                      line.value.startsWith("http");
+                    if (isScreenshot) {
+                      return (
+                        <div key={line.label} className="space-y-1">
+                          <p className="text-foreground">{line.label}</p>
+                          <a
+                            href={line.value}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block overflow-hidden rounded-xl border border-line"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={line.value}
+                              alt=""
+                              className="max-h-40 w-full object-contain bg-background"
+                            />
+                          </a>
+                        </div>
+                      );
+                    }
+                    return (
+                      <p key={line.label} className="break-all text-muted">
+                        <span className="text-foreground">{line.label}:</span>{" "}
+                        {line.value.startsWith("http") ? (
+                          <a
+                            href={line.value}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-accent underline"
+                          >
+                            {line.value}
+                          </a>
+                        ) : (
+                          line.value
+                        )}
+                      </p>
+                    );
+                  })
                 )}
               </div>
               {item.status === "submitted" || item.status === "disputed" ? (

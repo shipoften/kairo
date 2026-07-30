@@ -28,6 +28,10 @@ export const users = pgTable(
     inviteCode: varchar("invite_code", { length: 16 }).notNull(),
     invitedByUserId: uuid("invited_by_user_id"),
     referralEnabled: boolean("referral_enabled").notNull().default(true),
+    notifyEmail: varchar("notify_email", { length: 255 }),
+    telegramChatId: varchar("telegram_chat_id", { length: 64 }),
+    notifyTelegram: boolean("notify_telegram").notNull().default(true),
+    notifyEmailEnabled: boolean("notify_email_enabled").notNull().default(true),
     bannedAt: timestamp("banned_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -141,6 +145,7 @@ export const joins = pgTable(
       .references(() => users.id),
     status: varchar("status", { length: 32 }).notNull().default("joined"),
     proofPayload: jsonb("proof_payload"),
+    proofFingerprint: varchar("proof_fingerprint", { length: 128 }),
     rejectReason: text("reject_reason"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
@@ -156,6 +161,7 @@ export const joins = pgTable(
   (table) => [
     index("joins_task_idx").on(table.taskId),
     index("joins_earner_idx").on(table.earnerId),
+    index("joins_proof_fingerprint_idx").on(table.proofFingerprint),
     uniqueIndex("joins_task_earner_active_uidx").on(table.taskId, table.earnerId),
   ],
 );
@@ -243,6 +249,8 @@ export const depositAddresses = pgTable(
     chain: varchar("chain", { length: 16 }).notNull().default("trc20"),
     address: varchar("address", { length: 64 }).notNull(),
     derivationIndex: integer("derivation_index").notNull().default(0),
+    lastScannedAt: timestamp("last_scanned_at", { withTimezone: true }),
+    lastActivityAt: timestamp("last_activity_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -250,6 +258,7 @@ export const depositAddresses = pgTable(
   (table) => [
     uniqueIndex("deposit_addresses_address_uidx").on(table.address),
     index("deposit_addresses_user_idx").on(table.userId),
+    index("deposit_addresses_last_scanned_idx").on(table.lastScannedAt),
   ],
 );
 
@@ -301,7 +310,31 @@ export const withdrawals = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [index("withdrawals_user_idx").on(table.userId)],
+  (table) => [
+    index("withdrawals_user_idx").on(table.userId),
+    index("withdrawals_status_created_idx").on(table.status, table.createdAt),
+  ],
+);
+
+export const uploads = pgTable(
+  "uploads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    objectKey: varchar("object_key", { length: 512 }).notNull(),
+    contentType: varchar("content_type", { length: 64 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    publicUrl: text("public_url").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("uploads_object_key_uidx").on(table.objectKey),
+    index("uploads_user_idx").on(table.userId),
+  ],
 );
 
 export const disputes = pgTable(
@@ -383,6 +416,7 @@ export const schema = {
   depositAddresses,
   deposits,
   withdrawals,
+  uploads,
   disputes,
   notifications,
   referralRewards,

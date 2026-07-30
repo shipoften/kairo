@@ -15,7 +15,10 @@
     "login": "登录",
     "logout": "退出"
   },
-  "mode": { "publish": "发单模式", "earn": "接单模式" },
+  "mode": {
+    "publish": "发单模式",
+    "earn": "接单模式"
+  },
   "home": {
     "title": "在 X 上推广，按结果付费",
     "subtitle": "发单或接单，同一个账号。面向 X 推广的任务撮合，托管结算，中英双语。",
@@ -121,7 +124,10 @@
       "en": "English",
       "zh": "中文",
       "both": "双语"
-    }
+    },
+    "required": "必填",
+    "xBindRequired": "接单前请先绑定 X 账号。",
+    "bindXInSettings": "前往设置绑定 X"
   },
   "publish": {
     "title": "发单概览",
@@ -205,6 +211,14 @@
       "full": "已满额",
       "ended": "已结束",
       "taken_down": "已下架"
+    },
+    "proofRequirements": "该类型的凭证要求",
+    "proofRequired": "必填",
+    "proofOptional": "选填",
+    "proofField": {
+      "proofUrl": "凭证链接",
+      "screenshot": "截图",
+      "note": "备注"
     }
   },
   "earn": {
@@ -226,7 +240,7 @@
     "disputeSuccess": "已发起争议",
     "actionFailed": "操作失败",
     "proofUrl": "凭证链接",
-    "screenshot": "截图链接",
+    "screenshot": "截图",
     "proofUrlPlaceholder": "https://",
     "note": "备注",
     "filterAll": "全部",
@@ -246,7 +260,16 @@
       "rejected": "已驳回",
       "expired": "已过期",
       "disputed": "争议中"
-    }
+    },
+    "submitProof": "提交凭证",
+    "uploadScreenshot": "上传截图",
+    "replaceScreenshot": "更换截图",
+    "removeScreenshot": "移除",
+    "uploadHint": "支持 JPEG / PNG / WebP，最大 5MB。",
+    "uploadFailed": "上传失败",
+    "uploadTypeInvalid": "不支持的图片类型",
+    "uploadSizeInvalid": "图片不能超过 5MB",
+    "screenshotRequired": "该任务需要上传截图。"
   },
   "wallet": {
     "title": "钱包",
@@ -351,7 +374,14 @@
       "google": "Google",
       "telegram": "Telegram",
       "dev": "开发"
-    }
+    },
+    "notifications": "通知",
+    "notificationsHint": "选择充值、审核与提现等更新的接收方式。",
+    "notifyEmail": "通知邮箱",
+    "notifyEmailPlaceholder": "you@example.com",
+    "notifyEmailEnabled": "邮件通知",
+    "notifyTelegram": "Telegram 通知",
+    "telegramNotifyHint": "绑定 Telegram 后可接收机器人消息。"
   },
   "invite": {
     "title": "邀请返佣",
@@ -439,7 +469,18 @@
     "enableReferral": "开启返佣",
     "disableReferral": "关闭返佣",
     "confirmEnableReferral": "为该用户开启邀请返佣？",
-    "confirmDisableReferral": "为该用户关闭邀请返佣？"
+    "confirmDisableReferral": "为该用户关闭邀请返佣？",
+    "filterQueue": "待处理",
+    "filterPendingOnly": "仅待审批",
+    "filterApproved": "已审批",
+    "filterPaid": "已打款",
+    "filterRejected": "已拒绝",
+    "copied": "已复制",
+    "copyNet": "复制金额",
+    "cancel": "取消",
+    "confirmMarkPaid": "确认已打款",
+    "confirmReject": "确认拒绝",
+    "txHashPlaceholder": "交易哈希"
   },
   "notifications": {
     "title": "通知",
@@ -457,7 +498,12 @@
       "withdrawal_rejected": "提现驳回",
       "dispute_opened": "争议已发起",
       "dispute_resolved": "争议已裁决",
-      "referral_signup": "邀请注册"
+      "referral_signup": "邀请注册",
+      "join_expired": "接单已过期",
+      "auto_approved": "超时自动通过",
+      "task_ended": "任务已结束",
+      "withdrawal_requested": "已申请提现",
+      "referral_reward": "邀请奖励"
     }
   },
   "common": {
@@ -496,7 +542,11 @@
       "rate_limited": "请求过于频繁，请稍后再试",
       "self_referral_forbidden": "不能邀请自己",
       "referral_disabled": "邀请返佣已关闭",
-      "internal": "出错了"
+      "internal": "出错了",
+      "x_bind_required": "接单前请先绑定 X 账号",
+      "proof_invalid": "凭证不完整或格式无效",
+      "upload_invalid": "上传无效或存储不可用",
+      "duplicate_proof": "该凭证已提交过"
     }
   },
   "footer": {

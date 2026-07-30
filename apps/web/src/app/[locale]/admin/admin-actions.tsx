@@ -65,20 +65,15 @@ export function AdminActions({ data }: { data: AdminData }) {
     await postAction(`/v1/admin/withdrawals/${id}/approve`);
   }
 
-  async function markPaid(id: string) {
-    const txHash = window.prompt(t("enterTxHash"));
-    if (!txHash?.trim()) return;
+  async function markPaid(id: string, txHash: string) {
     await postAction(`/v1/admin/withdrawals/${id}/paid`, {
-      txHash: txHash.trim(),
+      txHash,
     });
   }
 
-  async function rejectWithdrawal(id: string) {
-    if (!confirm(t("rejectWithdrawal"))) return;
-    const note = window.prompt(t("rejectWithdrawalNote"));
-    if (note === null) return;
+  async function rejectWithdrawal(id: string, note?: string) {
     await postAction(`/v1/admin/withdrawals/${id}/reject`, {
-      note: note.trim() || undefined,
+      note,
     });
   }
 

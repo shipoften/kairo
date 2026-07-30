@@ -27,6 +27,10 @@ export default async function SettingsPage({
         identities={me.identities}
         providers={providers}
         telegramBotName={telegramBotName}
+        notifyEmail={me.notifyEmail}
+        notifyTelegram={me.notifyTelegram}
+        notifyEmailEnabled={me.notifyEmailEnabled}
+        telegramChatId={me.telegramChatId}
       />
     </main>
   );

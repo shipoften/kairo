@@ -39,16 +39,29 @@ export function SettingsForm({
   identities,
   providers,
   telegramBotName,
+  notifyEmail: initialNotifyEmail,
+  notifyTelegram: initialNotifyTelegram,
+  notifyEmailEnabled: initialNotifyEmailEnabled,
+  telegramChatId,
 }: {
   displayName: string;
   identities: Identity[];
   providers: Providers;
   telegramBotName: string | null;
+  notifyEmail: string | null;
+  notifyTelegram: boolean;
+  notifyEmailEnabled: boolean;
+  telegramChatId: string | null;
 }) {
   const t = useTranslations("settings");
   const locale = useLocale();
   const router = useRouter();
   const [displayName, setDisplayName] = useState(initialName);
+  const [notifyEmail, setNotifyEmail] = useState(initialNotifyEmail ?? "");
+  const [notifyTelegram, setNotifyTelegram] = useState(initialNotifyTelegram);
+  const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(
+    initialNotifyEmailEnabled,
+  );
   const [message, setMessage] = useState<string | null>(null);
 
   async function save() {
@@ -57,6 +70,9 @@ export function SettingsForm({
       body: JSON.stringify({
         displayName,
         preferredLocale: locale,
+        notifyEmail: notifyEmail.trim() || null,
+        notifyTelegram,
+        notifyEmailEnabled,
       }),
     });
     setMessage(t("saved"));
@@ -112,6 +128,44 @@ export function SettingsForm({
           {t("save")}
         </Button>
         {message ? <p className="text-sm text-accent">{message}</p> : null}
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-line bg-surface p-6">
+        <h2 className="font-medium">{t("notifications")}</h2>
+        <p className="text-sm text-muted">{t("notificationsHint")}</p>
+        <div className="space-y-1.5">
+          <Label htmlFor="settings-notify-email">{t("notifyEmail")}</Label>
+          <Input
+            id="settings-notify-email"
+            type="email"
+            value={notifyEmail}
+            onChange={(event) => setNotifyEmail(event.target.value)}
+            placeholder={t("notifyEmailPlaceholder")}
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={notifyEmailEnabled}
+            onChange={(event) => setNotifyEmailEnabled(event.target.checked)}
+          />
+          {t("notifyEmailEnabled")}
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={notifyTelegram}
+            onChange={(event) => setNotifyTelegram(event.target.checked)}
+            disabled={!telegramChatId}
+          />
+          {t("notifyTelegram")}
+        </label>
+        {!telegramChatId ? (
+          <p className="text-xs text-muted">{t("telegramNotifyHint")}</p>
+        ) : null}
+        <Button type="button" size="sm" onClick={save}>
+          {t("save")}
+        </Button>
       </section>
 
       <section className="space-y-3 rounded-2xl border border-line bg-surface p-6">

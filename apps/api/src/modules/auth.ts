@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { Elysia, t } from "elysia";
-import { authIdentities } from "@xs-share/db";
+import { authIdentities, users } from "@xs-share/db";
 import { API_PREFIX, AuthProvider } from "@xs-share/shared";
 import type { AppConfig } from "../config";
 import {
@@ -89,6 +89,22 @@ async function loginWithProfile(input: {
       provider,
       providerUserId: profile.providerUserId,
     });
+    const db = getDb();
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (provider === AuthProvider.telegram) {
+      patch.telegramChatId = profile.providerUserId;
+    }
+    if (profile.email) {
+      const existing = await db.query.users.findFirst({
+        where: eq(users.id, bindUserId),
+      });
+      if (existing && !existing.notifyEmail) {
+        patch.notifyEmail = profile.email;
+      }
+    }
+    if (Object.keys(patch).length > 1) {
+      await db.update(users).set(patch).where(eq(users.id, bindUserId));
+    }
     return { userId: bindUserId, isNew: false };
   }
 
@@ -99,6 +115,9 @@ async function loginWithProfile(input: {
     avatarUrl: profile.avatarUrl,
     inviteCode,
     locale,
+    email: profile.email,
+    telegramChatId:
+      provider === AuthProvider.telegram ? profile.providerUserId : null,
   });
 
   if (isNew && user.invitedByUserId) {
@@ -395,6 +414,16 @@ export function authModule(config: AppConfig) {
           provider: body.provider,
           providerUserId: body.providerUserId,
         });
+        if (body.provider === AuthProvider.telegram) {
+          const db = getDb();
+          await db
+            .update(users)
+            .set({
+              telegramChatId: body.providerUserId,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, current.id));
+        }
         return { ok: true };
       },
       {

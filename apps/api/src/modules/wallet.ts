@@ -551,22 +551,37 @@ export function adminModule(config: AppConfig) {
         }),
       },
     )
-    .get("/withdrawals", async ({ request }) => {
-      const { user } = await authFromRequest(request, config.SESSION_SECRET);
-      requireAdmin(user);
-      const db = getDb();
-      const items = await db.query.withdrawals.findMany({
-        orderBy: [desc(withdrawals.createdAt)],
-        limit: 200,
-      });
-      const nameById = await userNameById([...new Set(items.map((item) => item.userId))]);
-      return {
-        items: items.map((item) => ({
-          ...item,
-          userName: nameById.get(item.userId) ?? null,
-        })),
-      };
-    })
+    .get(
+      "/withdrawals",
+      async ({ request, query }) => {
+        const { user } = await authFromRequest(request, config.SESSION_SECRET);
+        requireAdmin(user);
+        const db = getDb();
+        const limit = Math.min(Math.max(Number(query.limit ?? 200), 1), 200);
+        const items = await db.query.withdrawals.findMany({
+          where: query.status
+            ? eq(withdrawals.status, query.status)
+            : undefined,
+          orderBy: [desc(withdrawals.createdAt)],
+          limit,
+        });
+        const nameById = await userNameById([
+          ...new Set(items.map((item) => item.userId)),
+        ]);
+        return {
+          items: items.map((item) => ({
+            ...item,
+            userName: nameById.get(item.userId) ?? null,
+          })),
+        };
+      },
+      {
+        query: t.Object({
+          status: t.Optional(t.String()),
+          limit: t.Optional(t.String()),
+        }),
+      },
+    )
     .post(
       "/withdrawals/:id/approve",
       async ({ request, params }) => {

@@ -82,6 +82,7 @@ async function createPublishedTask(
   cookie: string,
   input: {
     title: string;
+    type?: string;
     unitPriceMicros?: number;
     totalQuota?: number;
     endsAt?: string;
@@ -98,7 +99,7 @@ async function createPublishedTask(
       body: JSON.stringify({
         title: input.title,
         description: "Integration test task",
-        type: "x_follow",
+        type: input.type ?? "x_follow",
         targetUrl: "https://x.com/example",
         unitPriceMicros: input.unitPriceMicros ?? 1_000_000,
         totalQuota: input.totalQuota ?? 2,
@@ -109,7 +110,34 @@ async function createPublishedTask(
     }),
   );
   expect(response.status).toBe(200);
-  return json<{ task: { id: string; status: string } }>(response);
+  return json<{
+    task: { id: string; status: string; proofSchema: Record<string, unknown> };
+  }>(response);
+}
+
+async function bindX(app: AppHandle, cookie: string, providerUserId: string) {
+  const response = await app.handle(
+    new Request("http://localhost/v1/auth/bind", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        provider: "x",
+        providerUserId,
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
+}
+
+function proofPayload(suffix: string) {
+  return {
+    proofUrl: `https://x.com/proof/${suffix}`,
+    screenshot: `https://example.com/shots/${suffix}.png`,
+    note: `note-${suffix}`,
+  };
 }
 
 describe.skipIf(!hasDatabase)("api integration", () => {
@@ -158,6 +186,8 @@ describe.skipIf(!hasDatabase)("api integration", () => {
     const taskBody = await createPublishedTask(app, publisher.cookie, {
       title: "Follow account",
     });
+    expect(taskBody.task.proofSchema).toHaveProperty("proofUrl");
+    expect(taskBody.task.proofSchema).toHaveProperty("screenshot");
 
     const earner = await devLogin(app, {
       externalId: `earn-${stamp}`,
@@ -165,6 +195,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
       inviteCode: publisher.user.inviteCode,
     });
     expect(earner.user.id).not.toBe(publisher.user.id);
+    await bindX(app, earner.cookie, `x-earn-${stamp}`);
 
     const selfJoin = await app.handle(
       new Request("http://localhost/v1/joins", {
@@ -211,7 +242,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
           cookie: earner.cookie,
         },
         body: JSON.stringify({
-          proofPayload: { proofUrl: "https://x.com/proof" },
+          proofPayload: proofPayload(`main-${stamp}`),
         }),
       }),
     );
@@ -386,6 +417,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
       externalId: `earn2-${stamp}`,
       displayName: "Earner Two",
     });
+    await bindX(app, earner.cookie, `x-earn2-${stamp}`);
 
     const join = await app.handle(
       new Request("http://localhost/v1/joins", {
@@ -408,7 +440,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
           cookie: earner.cookie,
         },
         body: JSON.stringify({
-          proofPayload: { proofUrl: "https://x.com/bad-proof" },
+          proofPayload: proofPayload(`bad-${stamp}`),
         }),
       }),
     );
@@ -574,6 +606,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
       externalId: `earn3-${stamp}`,
       displayName: "Earner Three",
     });
+    await bindX(app, earner.cookie, `x-earn3-${stamp}`);
 
     const joinExpired = await app.handle(
       new Request("http://localhost/v1/joins", {
@@ -655,7 +688,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
             cookie: earner.cookie,
           },
           body: JSON.stringify({
-            proofPayload: { proofUrl: "https://x.com/first" },
+            proofPayload: proofPayload(`first-${stamp}`),
           }),
         },
       ),
@@ -684,7 +717,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
             cookie: earner.cookie,
           },
           body: JSON.stringify({
-            proofPayload: { proofUrl: "https://x.com/second" },
+            proofPayload: proofPayload(`second-${stamp}`),
           }),
         },
       ),
@@ -716,6 +749,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
       externalId: `earn-dispute-${stamp}`,
       displayName: "Earner Dispute",
     });
+    await bindX(app, earner.cookie, `x-dispute-${stamp}`);
 
     const joinResponse = await app.handle(
       new Request("http://localhost/v1/joins", {
@@ -738,7 +772,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
           cookie: earner.cookie,
         },
         body: JSON.stringify({
-          proofPayload: { proofUrl: "https://x.com/dispute-proof" },
+          proofPayload: proofPayload(`dispute-${stamp}`),
         }),
       }),
     );
@@ -938,4 +972,129 @@ describe.skipIf(!hasDatabase)("api integration", () => {
     const getBody = await json<{ deposit: { txHash: string } }>(getDeposit);
     expect(getBody.deposit.txHash).toBe(txHash);
   });
+
+  test("x bind required and withdraw must approve before paid", async () => {
+    resetChainAdapterForTests();
+    const stamp = Date.now() + 9;
+
+    const publisher = await devLogin(app, {
+      externalId: `pub-p0-${stamp}`,
+      displayName: "Publisher P0",
+    });
+    await makeAdmin(publisher.user.id);
+    await simulateDeposit(app, publisher.cookie, {
+      userId: publisher.user.id,
+      amountMicros: 40_000_000,
+    });
+
+    const task = await createPublishedTask(app, publisher.cookie, {
+      title: "X bind required",
+      totalQuota: 1,
+    });
+
+    const earner = await devLogin(app, {
+      externalId: `earn-p0-${stamp}`,
+      displayName: "Earner P0",
+    });
+
+    const joinWithoutX = await app.handle(
+      new Request("http://localhost/v1/joins", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({ taskId: task.task.id }),
+      }),
+    );
+    expect(joinWithoutX.status).toBe(403);
+    const joinError = await json<{ code: string }>(joinWithoutX);
+    expect(joinError.code).toBe("X_BIND_REQUIRED");
+
+    await bindX(app, earner.cookie, `x-p0-${stamp}`);
+    const join = await app.handle(
+      new Request("http://localhost/v1/joins", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({ taskId: task.task.id }),
+      }),
+    );
+    expect(join.status).toBe(200);
+    const joinBody = await json<{ join: { id: string } }>(join);
+
+    const incomplete = await app.handle(
+      new Request(`http://localhost/v1/joins/${joinBody.join.id}/submit`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({
+          proofPayload: { proofUrl: "https://x.com/only-url" },
+        }),
+      }),
+    );
+    expect(incomplete.status).toBe(400);
+
+    const submit = await app.handle(
+      new Request(`http://localhost/v1/joins/${joinBody.join.id}/submit`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({
+          proofPayload: proofPayload(`p0-${stamp}`),
+        }),
+      }),
+    );
+    expect(submit.status).toBe(200);
+
+    await app.handle(
+      new Request(`http://localhost/v1/reviews/${joinBody.join.id}/approve`, {
+        method: "POST",
+        headers: { cookie: publisher.cookie },
+      }),
+    );
+
+    await simulateDeposit(app, publisher.cookie, {
+      userId: earner.user.id,
+      amountMicros: 30_000_000,
+    });
+
+    const withdraw = await app.handle(
+      new Request("http://localhost/v1/wallet/withdrawals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({
+          amountMicros: 20_000_000,
+          toAddress: "TXYZopYRdj2D9XRtbG411XZZ3kM1VnEaMx",
+        }),
+      }),
+    );
+    expect(withdraw.status).toBe(200);
+    const withdrawBody = await json<{ withdrawal: { id: string } }>(withdraw);
+
+    const directPaid = await app.handle(
+      new Request(
+        `http://localhost/v1/admin/withdrawals/${withdrawBody.withdrawal.id}/paid`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: publisher.cookie,
+          },
+          body: JSON.stringify({ txHash: `directpaid${stamp}` }),
+        },
+      ),
+    );
+    expect(directPaid.status).toBe(409);
+  });
+
 });

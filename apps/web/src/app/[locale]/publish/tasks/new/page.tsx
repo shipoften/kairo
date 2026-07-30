@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/lib/api";
 import { displayUsdt, usdtToMicros } from "@/lib/money";
 import { resolveApiErrorMessage } from "@/lib/resolve-api-error";
+import { proofSchemaForTaskType } from "@xs-share/shared";
 
 const TYPES = [
   "x_follow",
@@ -98,6 +99,14 @@ export default function NewTaskPage() {
       })),
     [tTasks],
   );
+
+  const proofTemplate = useMemo(() => proofSchemaForTaskType(type), [type]);
+  const proofSummary = useMemo(() => {
+    return Object.entries(proofTemplate).map(([field, requirement]) => ({
+      field,
+      required: Boolean(requirement?.required),
+    }));
+  }, [proofTemplate]);
 
   async function submit(publish: boolean) {
     if (publish && !confirmed) {
@@ -186,6 +195,17 @@ export default function NewTaskPage() {
                 }
               />
             </FormField>
+            <div className="rounded-xl border border-line bg-background px-4 py-3 text-sm">
+              <p className="font-medium text-foreground">{t("proofRequirements")}</p>
+              <ul className="mt-2 space-y-1 text-muted">
+                {proofSummary.map((item) => (
+                  <li key={item.field}>
+                    {t(`proofField.${item.field}` as "proofField.proofUrl")}
+                    {item.required ? ` (${t("proofRequired")})` : ` (${t("proofOptional")})`}
+                  </li>
+                ))}
+              </ul>
+            </div>
             <FormField label={t("fieldTargetUrl")} htmlFor={targetUrlId}>
               <Input
                 id={targetUrlId}

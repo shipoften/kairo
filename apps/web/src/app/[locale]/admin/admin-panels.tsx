@@ -32,8 +32,8 @@ type AdminHandlers = {
   onSaveConfig: (config: AdminConfig) => Promise<void>;
   onSimulateDeposit: (userId: string, amountUsdt: number) => Promise<void>;
   onApproveWithdrawal: (id: string) => Promise<void>;
-  onMarkPaid: (id: string) => Promise<void>;
-  onRejectWithdrawal: (id: string) => Promise<void>;
+  onMarkPaid: (id: string, txHash: string) => Promise<void>;
+  onRejectWithdrawal: (id: string, note?: string) => Promise<void>;
   onTakeDownTask: (id: string) => Promise<void>;
   onBanUser: (id: string) => Promise<void>;
   onUnbanUser: (id: string) => Promise<void>;
@@ -132,29 +132,55 @@ export function AdminWithdrawalsPanel({
 }) {
   const t = useTranslations("admin");
   const locale = useLocale();
-  const [filter, setFilter] = useState<"pending" | "all">("pending");
+  const [filter, setFilter] = useState<
+    "queue" | "pending" | "approved" | "paid" | "rejected" | "all"
+  >("queue");
+  const [copyHint, setCopyHint] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     if (filter === "all") return withdrawals;
-    return withdrawals.filter(
-      (item) =>
-        item.status === WithdrawalStatus.pending ||
-        item.status === WithdrawalStatus.approved,
-    );
+    if (filter === "queue") {
+      return withdrawals.filter(
+        (item) =>
+          item.status === WithdrawalStatus.pending ||
+          item.status === WithdrawalStatus.approved,
+      );
+    }
+    return withdrawals.filter((item) => item.status === filter);
   }, [filter, withdrawals]);
+
+  function handleCopy(value: string) {
+    handlers.onCopy(value);
+    setCopyHint(t("copied"));
+    window.setTimeout(() => setCopyHint(null), 1500);
+  }
 
   return (
     <section className="space-y-3">
       <p className="text-sm text-muted">{t("withdrawOpsHint")}</p>
-      <FilterBar
-        filter={filter}
-        onChange={(value) => setFilter(value as "pending" | "all")}
-        pendingCount={withdrawals.filter(
-          (item) => item.status === WithdrawalStatus.pending,
-        ).length}
-        pendingValue="pending"
-        allValue="all"
-      />
+      {copyHint ? <p className="text-sm text-accent">{copyHint}</p> : null}
+      <div className="flex flex-wrap gap-2">
+        {(
+          [
+            ["queue", t("filterQueue")],
+            ["pending", t("filterPendingOnly")],
+            ["approved", t("filterApproved")],
+            ["paid", t("filterPaid")],
+            ["rejected", t("filterRejected")],
+            ["all", t("filterAll")],
+          ] as const
+        ).map(([value, label]) => (
+          <Button
+            key={value}
+            type="button"
+            size="sm"
+            variant={filter === value ? "primary" : "secondary"}
+            onClick={() => setFilter(value)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
       {filtered.length === 0 ? (
         <EmptyState />
       ) : (
@@ -163,7 +189,10 @@ export function AdminWithdrawalsPanel({
             key={item.id}
             item={item}
             locale={locale}
-            handlers={handlers}
+            handlers={{
+              ...handlers,
+              onCopy: handleCopy,
+            }}
           />
         ))
       )}
@@ -190,6 +219,34 @@ function WithdrawalCard({
   const tWallet = useTranslations("wallet");
   const statusKey = `withdrawStatus.${item.status}` as const;
   const statusLabel = tWallet.has(statusKey) ? tWallet(statusKey) : item.status;
+  const [showPaidForm, setShowPaidForm] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [txHash, setTxHash] = useState("");
+  const [rejectNote, setRejectNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submitPaid() {
+    if (!txHash.trim()) return;
+    setBusy(true);
+    try {
+      await handlers.onMarkPaid(item.id, txHash.trim());
+      setShowPaidForm(false);
+      setTxHash("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitReject() {
+    setBusy(true);
+    try {
+      await handlers.onRejectWithdrawal(item.id, rejectNote.trim() || undefined);
+      setShowRejectForm(false);
+      setRejectNote("");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="rounded-xl border border-line bg-surface px-4 py-3 text-sm">
@@ -205,7 +262,15 @@ function WithdrawalCard({
       </div>
       <p className="mt-1 text-muted">
         {formatWalletDate(item.createdAt, locale)} · {t("netPayout")}:{" "}
-        {displayUsdt(item.netPayoutMicros)} USDT
+        {displayUsdt(item.netPayoutMicros)} USDT{" "}
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          onClick={() => handlers.onCopy(String(item.netPayoutMicros / 1_000_000))}
+        >
+          {t("copyNet")}
+        </Button>
       </p>
       <p className="mt-1 break-all text-muted">
         {t("payoutAddress")}: {item.toAddress}{" "}
@@ -254,15 +319,10 @@ function WithdrawalCard({
               type="button"
               variant="link"
               size="sm"
-              onClick={() => void handlers.onMarkPaid(item.id)}
-            >
-              {t("markPaid")}
-            </Button>
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              onClick={() => void handlers.onRejectWithdrawal(item.id)}
+              onClick={() => {
+                setShowRejectForm((value) => !value);
+                setShowPaidForm(false);
+              }}
             >
               {t("reject")}
             </Button>
@@ -274,7 +334,10 @@ function WithdrawalCard({
               type="button"
               variant="link"
               size="sm"
-              onClick={() => void handlers.onMarkPaid(item.id)}
+              onClick={() => {
+                setShowPaidForm((value) => !value);
+                setShowRejectForm(false);
+              }}
             >
               {t("markPaid")}
             </Button>
@@ -282,13 +345,77 @@ function WithdrawalCard({
               type="button"
               variant="link"
               size="sm"
-              onClick={() => void handlers.onRejectWithdrawal(item.id)}
+              onClick={() => {
+                setShowRejectForm((value) => !value);
+                setShowPaidForm(false);
+              }}
             >
               {t("reject")}
             </Button>
           </>
         ) : null}
       </div>
+      {showPaidForm ? (
+        <div className="mt-3 space-y-2 rounded-xl border border-line bg-background p-3">
+          <label className="block text-sm">
+            {t("enterTxHash")}
+            <input
+              className="mt-1 w-full rounded-xl border border-line px-3 py-2 font-mono text-sm"
+              value={txHash}
+              onChange={(event) => setTxHash(event.target.value)}
+              placeholder={t("txHashPlaceholder")}
+            />
+          </label>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              loading={busy}
+              onClick={() => void submitPaid()}
+            >
+              {t("confirmMarkPaid")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => setShowPaidForm(false)}
+            >
+              {t("cancel")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {showRejectForm ? (
+        <div className="mt-3 space-y-2 rounded-xl border border-line bg-background p-3">
+          <label className="block text-sm">
+            {t("rejectWithdrawalNote")}
+            <input
+              className="mt-1 w-full rounded-xl border border-line px-3 py-2 text-sm"
+              value={rejectNote}
+              onChange={(event) => setRejectNote(event.target.value)}
+            />
+          </label>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              loading={busy}
+              onClick={() => void submitReject()}
+            >
+              {t("confirmReject")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => setShowRejectForm(false)}
+            >
+              {t("cancel")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

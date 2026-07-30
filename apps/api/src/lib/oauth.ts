@@ -6,6 +6,7 @@ export type OAuthProfile = {
   providerUserId: string;
   displayName: string;
   avatarUrl?: string | null;
+  email?: string | null;
 };
 
 function callbackUrl(config: AppConfig, provider: string) {
@@ -84,6 +85,7 @@ export async function exchangeGoogleCode(
     providerUserId: profile.id,
     displayName: profile.name ?? profile.email ?? "Google user",
     avatarUrl: profile.picture ?? null,
+    email: profile.email ?? null,
   };
 }
 

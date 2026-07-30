@@ -15,6 +15,37 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - xs_share_minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb -p local/kairo-uploads || true;
+      mc anonymous set download local/kairo-uploads;
+      exit 0;
+      "
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
   api:
     build:
       context: .
@@ -32,11 +63,27 @@ services:
       X_CLIENT_ID: ""
       X_CLIENT_SECRET: ""
       TELEGRAM_BOT_TOKEN: ""
+      CHAIN_ADAPTER: mock
+      S3_ENDPOINT: http://minio:9000
+      S3_PRESIGN_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: kairo-uploads
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_PUBLIC_BASE_URL: http://localhost:9000/kairo-uploads
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
+      SMTP_FROM: noreply@kairo.local
     ports:
       - "5181:5181"
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
 
   web:
     build:
@@ -53,3 +100,4 @@ services:
 
 volumes:
   xs_share_pg:
+  xs_share_minio:

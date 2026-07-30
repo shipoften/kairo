@@ -1,13 +1,17 @@
 import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
-import { joins, tasks, users } from "@xs-share/db";
+import { authIdentities, joins, tasks, users } from "@xs-share/db";
 import {
   APP_NAME,
   API_PREFIX,
+  AuthProvider,
   ErrorCode,
   JoinStatus,
+  isXTaskType,
+  proofSchemaForTaskType,
   TaskStatus,
   TaskType,
+  type ProofSchema,
 } from "@xs-share/shared";
 import type { AppConfig } from "../config";
 import { requireUser } from "../lib/auth";
@@ -17,6 +21,11 @@ import { AppError, conflict, notFound, validation } from "../lib/errors";
 import { checkRateLimit } from "../lib/rate-limit";
 import { addHours } from "../lib/crypto";
 import { bpsAmount, getPlatformSettings } from "../services/config";
+import {
+  normalizeProofPayload,
+  proofFingerprint,
+  validateProofAgainstSchema,
+} from "../services/proof";
 import { freezeForTaskPublish, releaseTaskHoldRemaining } from "../services/wallet";
 import { notifyUser } from "../services/notify";
 
@@ -38,6 +47,8 @@ function publicTask(task: typeof tasks.$inferSelect, publisherName?: string) {
     endsAt: task.endsAt,
     publisherId: task.publisherId,
     publisherName: publisherName ?? null,
+    proofSchema: task.proofSchema,
+    allowResubmit: task.allowResubmit,
     createdAt: task.createdAt,
   };
 }
@@ -247,7 +258,9 @@ export function tasksModule(config: AppConfig) {
           submitDeadlineHours: body.submitDeadlineHours ?? 72,
           reviewDeadlineHours: body.reviewDeadlineHours ?? 72,
           allowResubmit: body.allowResubmit ?? true,
-          proofSchema: body.proofSchema ?? {},
+          proofSchema:
+            (body.proofSchema as ProofSchema | undefined) ??
+            proofSchemaForTaskType(body.type),
           endsAt: body.endsAt ? new Date(body.endsAt) : null,
         })
         .returning();
@@ -378,6 +391,10 @@ export function tasksModule(config: AppConfig) {
           title: body.title ?? task.title,
           description: body.description ?? task.description,
           targetUrl: body.targetUrl === undefined ? task.targetUrl : body.targetUrl,
+          proofSchema:
+            body.proofSchema === undefined
+              ? task.proofSchema
+              : body.proofSchema,
           updatedAt: new Date(),
         })
         .where(eq(tasks.id, task.id))
@@ -390,6 +407,7 @@ export function tasksModule(config: AppConfig) {
         title: t.Optional(t.String()),
         description: t.Optional(t.String()),
         targetUrl: t.Optional(t.Union([t.String(), t.Null()])),
+        proofSchema: t.Optional(t.Any()),
         status: t.Optional(t.String()),
       }),
     },
@@ -502,6 +520,23 @@ export function joinsModule(config: AppConfig) {
       }
       assertTaskJoinable(task);
 
+      if (isXTaskType(task.type)) {
+        const xIdentity = await db.query.authIdentities.findFirst({
+          where: and(
+            eq(authIdentities.userId, current.id),
+            eq(authIdentities.provider, AuthProvider.x),
+          ),
+        });
+        if (!xIdentity) {
+          throw new AppError(
+            ErrorCode.X_BIND_REQUIRED,
+            "Bind an X account before joining this task",
+            403,
+            "errors.x_bind_required",
+          );
+        }
+      }
+
       const existing = await db.query.joins.findFirst({
         where: and(eq(joins.taskId, task.id), eq(joins.earnerId, current.id)),
       });
@@ -609,12 +644,45 @@ export function joinsModule(config: AppConfig) {
         );
       }
 
+      const proofPayload = normalizeProofPayload(
+        body.proofPayload as Record<string, unknown>,
+      );
+      const schema =
+        (task.proofSchema as ProofSchema) &&
+        Object.keys(task.proofSchema as object).length > 0
+          ? (task.proofSchema as ProofSchema)
+          : proofSchemaForTaskType(task.type);
+      validateProofAgainstSchema(schema, proofPayload);
+      const fingerprint = proofFingerprint(proofPayload);
+      if (fingerprint !== proofFingerprint({})) {
+        const duplicate = await db.query.joins.findFirst({
+          where: and(
+            eq(joins.taskId, task.id),
+            eq(joins.proofFingerprint, fingerprint),
+            inArray(joins.status, [
+              JoinStatus.submitted,
+              JoinStatus.approved,
+              JoinStatus.disputed,
+            ]),
+          ),
+        });
+        if (duplicate && duplicate.id !== join.id) {
+          throw new AppError(
+            ErrorCode.DUPLICATE_PROOF,
+            "This proof was already submitted for this task",
+            409,
+            "errors.duplicate_proof",
+          );
+        }
+      }
+
       const now = new Date();
       const [updated] = await db
         .update(joins)
         .set({
           status: JoinStatus.submitted,
-          proofPayload: body.proofPayload,
+          proofPayload,
+          proofFingerprint: fingerprint,
           submittedAt: now,
           submitDeadlineAt:
             join.status === JoinStatus.rejected
