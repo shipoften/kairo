@@ -22,8 +22,8 @@ export default function DevLoginForm({
   const t = useTranslations("login");
   const router = useRouter();
   const locale = useLocale();
-  const [externalId, setExternalId] = useState("publisher-1");
-  const [displayName, setDisplayName] = useState("Publisher One");
+  const [externalId, setExternalId] = useState("dev-admin");
+  const [displayName, setDisplayName] = useState("Admin");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -62,6 +62,7 @@ export default function DevLoginForm({
             id="dev-external-id"
             value={externalId}
             onChange={(event) => setExternalId(event.target.value)}
+            placeholder={t("externalIdPlaceholder")}
           />
         </div>
         <div className="space-y-1.5">
@@ -70,6 +71,7 @@ export default function DevLoginForm({
             id="dev-display-name"
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
+            placeholder={t("displayNamePlaceholder")}
           />
         </div>
         {error ? <p className="text-sm text-red-700">{error}</p> : null}

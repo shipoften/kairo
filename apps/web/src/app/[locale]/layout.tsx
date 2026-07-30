@@ -1,19 +1,19 @@
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
-import { Fraunces, Source_Sans_3 } from "next/font/google";
+import { DM_Sans, Lora } from "next/font/google";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { routing } from "@/i18n/routing";
 import { apiServerWithSession, getMe } from "@/lib/session";
 import "../globals.css";
 
-const display = Fraunces({
+const display = Lora({
   subsets: ["latin"],
   variable: "--font-display",
 });
 
-const body = Source_Sans_3({
+const body = DM_Sans({
   subsets: ["latin"],
   variable: "--font-body",
 });

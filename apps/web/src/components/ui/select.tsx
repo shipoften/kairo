@@ -24,7 +24,7 @@ export type SelectProps = {
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
-  placeholder?: string;
+  placeholder: string;
   disabled?: boolean;
   id?: string;
   className?: string;
@@ -36,9 +36,30 @@ function syncDropdownPosition(
   listElement: HTMLUListElement,
 ) {
   const rect = anchorElement.getBoundingClientRect();
-  listElement.style.top = `${rect.bottom + 4}px`;
-  listElement.style.left = `${rect.left}px`;
+  const viewportPadding = 8;
+  const gap = 4;
+  const maxListHeight = 240;
+
+  const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+  const spaceAbove = rect.top - viewportPadding;
+  const openUpward = spaceBelow < maxListHeight && spaceAbove > spaceBelow;
+  const availableSpace = (openUpward ? spaceAbove : spaceBelow) - gap;
+  const maxHeight = Math.min(maxListHeight, Math.max(availableSpace, 0));
+
+  listElement.style.maxHeight = `${maxHeight}px`;
   listElement.style.width = `${rect.width}px`;
+  listElement.style.left = `${Math.min(
+    rect.left,
+    window.innerWidth - rect.width - viewportPadding,
+  )}px`;
+
+  const listHeight = listElement.offsetHeight;
+
+  if (openUpward) {
+    listElement.style.top = `${rect.top - listHeight - gap}px`;
+  } else {
+    listElement.style.top = `${rect.bottom + gap}px`;
+  }
 }
 
 function SelectOptionsPortal({
@@ -97,7 +118,8 @@ function SelectOptionsPortal({
       ref={listRef}
       id={listId}
       role="listbox"
-      className="fixed z-50 max-h-60 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-lg"
+      className="fixed z-[60] max-h-60 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-lg"
+      data-ui-select-listbox=""
     >
       {options.map((option, index) => {
         const selected = option.value === value;

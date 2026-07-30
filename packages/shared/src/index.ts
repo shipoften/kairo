@@ -147,6 +147,10 @@ export const ErrorCode = {
   DUPLICATE_JOIN: "DUPLICATE_JOIN",
   QUOTA_FULL: "QUOTA_FULL",
   TASK_NOT_OPEN: "TASK_NOT_OPEN",
+  TASK_EXPIRED: "TASK_EXPIRED",
+  SUBMIT_DEADLINE_PASSED: "SUBMIT_DEADLINE_PASSED",
+  RESUBMIT_FORBIDDEN: "RESUBMIT_FORBIDDEN",
+  DISPUTE_ALREADY_OPEN: "DISPUTE_ALREADY_OPEN",
   RATE_LIMITED: "RATE_LIMITED",
   SELF_REFERRAL_FORBIDDEN: "SELF_REFERRAL_FORBIDDEN",
   REFERRAL_DISABLED: "REFERRAL_DISABLED",
@@ -167,6 +171,27 @@ export const SESSION_COOKIE_NAME = "xs_session";
 
 export const TRONSCAN_TX_URL = "https://tronscan.org/#/transaction";
 export const TRONSCAN_ADDRESS_URL = "https://tronscan.org/#/address";
+
+/** Mainnet USDT TRC20 contract (Tron). */
+export const DEFAULT_TRON_USDT_CONTRACT =
+  "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+
+/** Tron mainnet chain id hex used by TronLink. */
+export const TRON_MAINNET_CHAIN_ID = "0x2b6653dc";
+
+/** Convert display USDT to micro-USDT (6 decimals). */
+export function usdtToMicros(amountUsdt: number): number {
+  if (!Number.isFinite(amountUsdt) || amountUsdt <= 0) return 0;
+  return Math.round(amountUsdt * 1_000_000);
+}
+
+/** TRC20 transfer amount param: 6-decimal USDT to uint256 token units. */
+export function usdtMicrosToTokenAmount(micros: number): string {
+  if (!Number.isInteger(micros) || micros <= 0) {
+    throw new Error("Invalid USDT micro amount");
+  }
+  return String(micros);
+}
 
 /** Loose TRC20 Base58Check shape check (not full checksum). */
 export function isValidTrc20Address(address: string): boolean {

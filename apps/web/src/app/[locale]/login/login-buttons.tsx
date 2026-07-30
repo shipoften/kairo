@@ -127,10 +127,7 @@ export function LoginButtons({
         ) : null}
       </Card>
 
-      {providers.devLogin &&
-      !providers.google &&
-      !providers.x &&
-      !providers.telegram ? (
+      {providers.devLogin ? (
         <DevLoginForm
           inviteCode={inviteCode}
           returnTo={returnTo}

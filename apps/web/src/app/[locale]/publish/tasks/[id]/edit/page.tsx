@@ -1,5 +1,7 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { redirect } from "next/navigation";
+import { Alert } from "@/components/ui/alert";
+import { PageHeader } from "@/components/ui/page-header";
 import { buildLoginRedirect } from "@/lib/login-redirect";
 import { apiServerWithSession } from "@/lib/session";
 import { EditTaskForm } from "./edit-task-form";
@@ -26,12 +28,16 @@ export default async function EditTaskPage({
 
   const task = data.items.find((item) => item.id === id);
   if (!task || task.status !== "draft") {
-    return <p className="text-red-700">{t("editDraftOnly")}</p>;
+    return (
+      <main className="mx-auto w-full max-w-2xl">
+        <Alert variant="error">{t("editDraftOnly")}</Alert>
+      </main>
+    );
   }
 
   return (
-    <main className="mx-auto w-full max-w-xl space-y-6">
-      <h1 className="font-[family-name:var(--font-display)] text-3xl">{t("edit")}</h1>
+    <main className="mx-auto flex w-full max-w-2xl flex-col gap-8">
+      <PageHeader title={t("edit")} description={t("editDescription")} />
       <EditTaskForm
         taskId={id}
         initialTitle={task.title}

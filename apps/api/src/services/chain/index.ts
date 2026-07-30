@@ -1,27 +1,20 @@
 import { createHash } from "node:crypto";
-import { Chain } from "@xs-share/shared";
+import {
+  Chain,
+  DEFAULT_TRON_USDT_CONTRACT,
+  isValidTrc20Address,
+} from "@xs-share/shared";
+import { TronChainAdapter } from "./tron";
+import type { ChainAdapter, IncomingUsdtTransfer } from "./types";
 
-export type IncomingUsdtTransfer = {
-  txHash: string;
-  fromAddress: string;
-  toAddress: string;
-  amountMicros: number;
-  confirmations: number;
-  blockTimestamp: Date;
-};
-
-export type ChainAdapter = {
-  readonly name: string;
-  allocateAddress(userId: string, derivationIndex: number): Promise<string>;
-  isValidAddress(address: string): boolean;
-  getConfirmations(txHash: string): Promise<number>;
-  listIncomingUsdt(
-    address: string,
-    since?: Date,
-  ): Promise<IncomingUsdtTransfer[]>;
-  /** Mock/dev only: inject a transfer for testing. */
-  injectIncoming?(transfer: IncomingUsdtTransfer): void;
-};
+export type { ChainAdapter, IncomingUsdtTransfer } from "./types";
+export {
+  TronChainAdapter,
+  deriveTronAddressFromXpub,
+  parseUsdtTokenAmount,
+  tronAddressFromPublicKey,
+  TRON_DEPOSIT_XPUB_PATH,
+} from "./tron";
 
 const mockIncomingByAddress = new Map<string, IncomingUsdtTransfer[]>();
 const mockConfirmations = new Map<string, number>();
@@ -48,7 +41,7 @@ export class MockChainAdapter implements ChainAdapter {
   }
 
   isValidAddress(address: string) {
-    return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address);
+    return isValidTrc20Address(address);
   }
 
   async getConfirmations(txHash: string) {
@@ -59,6 +52,11 @@ export class MockChainAdapter implements ChainAdapter {
     const items = mockIncomingByAddress.get(address) ?? [];
     if (!since) return [...items];
     return items.filter((item) => item.blockTimestamp >= since);
+  }
+
+  async getIncomingUsdtByTxHash(txHash: string, toAddress: string) {
+    const items = mockIncomingByAddress.get(toAddress) ?? [];
+    return items.find((item) => item.txHash === txHash) ?? null;
   }
 
   injectIncoming(transfer: IncomingUsdtTransfer) {
@@ -85,33 +83,13 @@ export class MockChainAdapter implements ChainAdapter {
   }
 }
 
-export class UnimplementedTronAdapter implements ChainAdapter {
-  readonly name = "tron";
-
-  async allocateAddress(): Promise<string> {
-    throw new Error("Tron adapter not implemented; set CHAIN_ADAPTER=mock");
-  }
-
-  isValidAddress(address: string) {
-    return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address);
-  }
-
-  async getConfirmations(): Promise<number> {
-    throw new Error("Tron adapter not implemented");
-  }
-
-  async listIncomingUsdt(): Promise<IncomingUsdtTransfer[]> {
-    throw new Error("Tron adapter not implemented");
-  }
-}
-
 let cached: ChainAdapter | null = null;
 
 export function getChainAdapter(): ChainAdapter {
   if (cached) return cached;
   const mode = (process.env.CHAIN_ADAPTER ?? "mock").toLowerCase();
   if (mode === "tron") {
-    cached = new UnimplementedTronAdapter();
+    cached = new TronChainAdapter();
   } else {
     cached = new MockChainAdapter();
   }

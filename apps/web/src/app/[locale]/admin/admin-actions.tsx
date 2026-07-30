@@ -5,70 +5,54 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { apiFetch } from "@/lib/api";
-import { displayUsdt } from "@/lib/money";
+import {
+  AdminConfigPanel,
+  AdminDepositsPanel,
+  AdminDisputesPanel,
+  AdminOverviewPanel,
+  AdminTasksPanel,
+  AdminUsersPanel,
+  AdminWithdrawalsPanel,
+} from "./admin-panels";
+import type { AdminConfig, AdminData, AdminTab } from "./admin-types";
 
-type Config = {
-  platformFeeRateBps: number;
-  referralEnabled: boolean;
-  referralEarnRateBps: number;
-  referralPublishRateBps: number;
-};
-
-type DepositRow = {
-  id: string;
-  userId: string;
-  amountMicros: number;
-  status: string;
-  txHash: string;
-  address: string;
-};
-
-type WithdrawalRow = {
-  id: string;
-  userId: string;
-  amountMicros: number;
-  networkFeeMicros: number;
-  netPayoutMicros: number;
-  toAddress: string;
-  status: string;
-  txHash: string | null;
-};
-
-type AdminData = {
-  config: Config;
-  deposits: DepositRow[];
-  withdrawals: WithdrawalRow[];
-  users: Array<{
-    id: string;
-    displayName: string;
-    role: string;
-    bannedAt: string | null;
-  }>;
-  tasks: Array<{ id: string; title: string; status: string }>;
-  disputes: Array<{ id: string; status: string; reason: string }>;
-  currentUserId: string;
-};
+const TABS: AdminTab[] = [
+  "overview",
+  "withdrawals",
+  "disputes",
+  "deposits",
+  "users",
+  "tasks",
+  "config",
+];
 
 export function AdminActions({ data }: { data: AdminData }) {
   const t = useTranslations("admin");
   const router = useRouter();
-  const [simulateUserId, setSimulateUserId] = useState(data.currentUserId);
-  const [simulateAmount, setSimulateAmount] = useState(50);
+  const [activeTab, setActiveTab] = useState<AdminTab>("overview");
 
   async function refresh() {
     router.refresh();
   }
 
-  async function saveConfig(config: Config) {
+  async function saveConfig(config: AdminConfig) {
     await apiFetch("/v1/admin/config", {
       method: "PATCH",
-      body: JSON.stringify(config),
+      body: JSON.stringify({
+        platformFeeRateBps: config.platformFeeRateBps,
+        referralEnabled: config.referralEnabled,
+        referralEarnRateBps: config.referralEarnRateBps,
+        referralPublishRateBps: config.referralPublishRateBps,
+        minDepositMicros: config.minDepositMicros,
+        minWithdrawMicros: config.minWithdrawMicros,
+        withdrawNetworkFeeMicros: config.withdrawNetworkFeeMicros,
+        trc20Confirmations: config.trc20Confirmations,
+      }),
     });
     await refresh();
   }
 
-  async function confirmAction(path: string, message: string, body?: unknown) {
-    if (!confirm(message)) return;
+  async function postAction(path: string, body?: unknown) {
     await apiFetch(path, {
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
@@ -76,300 +60,168 @@ export function AdminActions({ data }: { data: AdminData }) {
     await refresh();
   }
 
+  async function approveWithdrawal(id: string) {
+    if (!confirm(t("confirmApprove"))) return;
+    await postAction(`/v1/admin/withdrawals/${id}/approve`);
+  }
+
   async function markPaid(id: string) {
     const txHash = window.prompt(t("enterTxHash"));
     if (!txHash?.trim()) return;
-    await apiFetch(`/v1/admin/withdrawals/${id}/paid`, {
-      method: "POST",
-      body: JSON.stringify({ txHash: txHash.trim() }),
+    await postAction(`/v1/admin/withdrawals/${id}/paid`, {
+      txHash: txHash.trim(),
     });
-    await refresh();
   }
 
-  async function simulateDeposit() {
-    await apiFetch("/v1/admin/deposits/simulate", {
-      method: "POST",
-      body: JSON.stringify({
-        userId: simulateUserId,
-        amountMicros: Math.round(simulateAmount * 1_000_000),
-      }),
+  async function rejectWithdrawal(id: string) {
+    if (!confirm(t("rejectWithdrawal"))) return;
+    const note = window.prompt(t("rejectWithdrawalNote"));
+    if (note === null) return;
+    await postAction(`/v1/admin/withdrawals/${id}/reject`, {
+      note: note.trim() || undefined,
     });
-    await refresh();
+  }
+
+  async function resolveDispute(id: string, decision: "approve" | "reject") {
+    const note = window.prompt(
+      decision === "approve" ? t("disputeApproveNote") : t("disputeRejectNote"),
+      decision === "approve" ? t("disputeApproveDefault") : t("disputeRejectDefault"),
+    );
+    if (note === null) return;
+    await postAction(`/v1/admin/disputes/${id}/resolve`, {
+      decision,
+      note: note.trim() || undefined,
+    });
+  }
+
+  async function simulateDeposit(userId: string, amountUsdt: number) {
+    await postAction("/v1/admin/deposits/simulate", {
+      userId,
+      amountMicros: Math.round(amountUsdt * 1_000_000),
+    });
+  }
+
+  async function takeDownTask(id: string) {
+    if (!confirm(t("confirmTakeDown"))) return;
+    await postAction(`/v1/admin/tasks/${id}/take-down`);
+  }
+
+  async function banUser(id: string) {
+    if (!confirm(t("confirmBan"))) return;
+    await postAction(`/v1/admin/users/${id}/ban`);
+  }
+
+  async function unbanUser(id: string) {
+    if (!confirm(t("confirmUnban"))) return;
+    await postAction(`/v1/admin/users/${id}/unban`);
+  }
+
+  async function toggleReferral(id: string, currentlyDisabled: boolean) {
+    const message = currentlyDisabled
+      ? t("confirmEnableReferral")
+      : t("confirmDisableReferral");
+    if (!confirm(message)) return;
+    await postAction(`/v1/admin/users/${id}/referral`, {
+      enabled: currentlyDisabled,
+    });
+  }
+
+  async function copyText(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // ignore clipboard failures
+    }
+  }
+
+  function tabLabel(tab: AdminTab) {
+    if (tab === "overview") return t("overview");
+    return t(tab);
+  }
+
+  function tabBadge(tab: AdminTab) {
+    if (tab === "withdrawals" && data.overview.pendingWithdrawals > 0) {
+      return data.overview.pendingWithdrawals;
+    }
+    if (tab === "disputes" && data.overview.openDisputes > 0) {
+      return data.overview.openDisputes;
+    }
+    return null;
   }
 
   return (
-    <>
-      <section className="space-y-3 rounded-2xl border border-line bg-surface p-5">
-        <h2 className="text-lg font-medium">{t("config")}</h2>
-        <ConfigEditor config={data.config} onSave={saveConfig} />
-      </section>
+    <div className="space-y-6">
+      <nav className="flex flex-wrap gap-2">
+        {TABS.map((tab) => {
+          const badge = tabBadge(tab);
+          return (
+            <Button
+              key={tab}
+              type="button"
+              size="sm"
+              variant={activeTab === tab ? "primary" : "secondary"}
+              onClick={() => setActiveTab(tab)}
+            >
+              {tabLabel(tab)}
+              {badge !== null ? ` (${badge})` : ""}
+            </Button>
+          );
+        })}
+      </nav>
 
-      <section className="space-y-3 rounded-2xl border border-line bg-surface p-5">
-        <h2 className="text-lg font-medium">{t("simulateDeposit")}</h2>
-        <label className="block text-sm">
-          {t("simulateUserId")}
-          <input
-            className="mt-1 w-full rounded-xl border border-line px-3 py-2 font-mono text-sm"
-            value={simulateUserId}
-            onChange={(event) => setSimulateUserId(event.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          {t("simulateAmountUsdt")}
-          <input
-            type="number"
-            min={1}
-            step="0.01"
-            className="mt-1 w-full rounded-xl border border-line px-3 py-2"
-            value={simulateAmount}
-            onChange={(event) => setSimulateAmount(Number(event.target.value))}
-          />
-        </label>
-        <Button type="button" size="sm" onClick={simulateDeposit}>
-          {t("simulateDeposit")}
-        </Button>
-      </section>
-
-      <AdminList
-        title={t("deposits")}
-        items={data.deposits.map((item) => ({
-          id: item.id,
-          label: `${item.id.slice(0, 8)} · ${displayUsdt(item.amountMicros)} · ${item.status} · ${item.txHash.slice(0, 10)}…`,
-          actions: [],
-        }))}
-      />
-
-      <AdminList
-        title={t("withdrawals")}
-        items={data.withdrawals.map((item) => ({
-          id: item.id,
-          label: `${item.id.slice(0, 8)} · ${displayUsdt(item.amountMicros)} → ${displayUsdt(item.netPayoutMicros)} · ${item.status} · ${item.toAddress.slice(0, 10)}…`,
-          actions:
-            item.status === "pending"
-              ? [
-                  {
-                    label: t("approve"),
-                    onClick: () =>
-                      confirmAction(
-                        `/v1/admin/withdrawals/${item.id}/approve`,
-                        t("confirmApprove"),
-                      ),
-                  },
-                  {
-                    label: t("markPaid"),
-                    onClick: () => markPaid(item.id),
-                  },
-                  {
-                    label: t("reject"),
-                    onClick: () =>
-                      confirmAction(
-                        `/v1/admin/withdrawals/${item.id}/reject`,
-                        t("rejectWithdrawal"),
-                      ),
-                  },
-                ]
-              : item.status === "approved"
-                ? [
-                    {
-                      label: t("markPaid"),
-                      onClick: () => markPaid(item.id),
-                    },
-                    {
-                      label: t("reject"),
-                      onClick: () =>
-                        confirmAction(
-                          `/v1/admin/withdrawals/${item.id}/reject`,
-                          t("rejectWithdrawal"),
-                        ),
-                    },
-                  ]
-                : [],
-        }))}
-      />
-
-      <AdminList
-        title={t("tasks")}
-        items={data.tasks.map((item) => ({
-          id: item.id,
-          label: `${item.title} · ${item.status}`,
-          actions:
-            item.status !== "taken_down"
-              ? [
-                  {
-                    label: t("takeDown"),
-                    onClick: () =>
-                      confirmAction(
-                        `/v1/admin/tasks/${item.id}/take-down`,
-                        t("confirmTakeDown"),
-                      ),
-                  },
-                ]
-              : [],
-        }))}
-      />
-
-      <AdminList
-        title={t("users")}
-        items={data.users.map((item) => ({
-          id: item.id,
-          label: `${item.displayName} · ${item.role}${item.bannedAt ? ` · ${t("banned")}` : ""}`,
-          actions: item.bannedAt
-            ? [
-                {
-                  label: t("unban"),
-                  onClick: () =>
-                    confirmAction(
-                      `/v1/admin/users/${item.id}/unban`,
-                      t("confirmUnban"),
-                    ),
-                },
-              ]
-            : [
-                {
-                  label: t("ban"),
-                  onClick: () =>
-                    confirmAction(
-                      `/v1/admin/users/${item.id}/ban`,
-                      t("confirmBan"),
-                    ),
-                },
-              ],
-        }))}
-      />
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">{t("disputes")}</h2>
-        {data.disputes.map((item) => (
-          <div
-            key={item.id}
-            className="rounded-xl border border-line bg-surface px-4 py-3 text-sm"
-          >
-            <p>
-              {item.status}: {item.reason}
-            </p>
-            {item.status === "open" ? (
-              <div className="mt-2 flex gap-2">
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  onClick={async () => {
-                    await apiFetch(`/v1/admin/disputes/${item.id}/resolve`, {
-                      method: "POST",
-                      body: JSON.stringify({
-                        decision: "approve",
-                        note: "approved",
-                      }),
-                    });
-                    await refresh();
-                  }}
-                >
-                  {t("approve")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  onClick={async () => {
-                    await apiFetch(`/v1/admin/disputes/${item.id}/resolve`, {
-                      method: "POST",
-                      body: JSON.stringify({
-                        decision: "reject",
-                        note: "rejected",
-                      }),
-                    });
-                    await refresh();
-                  }}
-                >
-                  {t("reject")}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </section>
-    </>
-  );
-}
-
-function ConfigEditor({
-  config,
-  onSave,
-}: {
-  config: Config;
-  onSave: (config: Config) => Promise<void>;
-}) {
-  const t = useTranslations("admin");
-  const [local, setLocal] = useState(config);
-
-  return (
-    <div className="space-y-3">
-      <label className="block text-sm">
-        {t("platformFeeBps")}
-        <input
-          type="number"
-          className="mt-1 w-full rounded-xl border border-line px-3 py-2"
-          value={local.platformFeeRateBps}
-          onChange={(event) =>
-            setLocal({
-              ...local,
-              platformFeeRateBps: Number(event.target.value),
-            })
-          }
+      {activeTab === "overview" ? (
+        <AdminOverviewPanel
+          overview={data.overview}
+          onNavigateTab={setActiveTab}
         />
-      </label>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={local.referralEnabled}
-          onChange={(event) =>
-            setLocal({ ...local, referralEnabled: event.target.checked })
-          }
+      ) : null}
+
+      {activeTab === "withdrawals" ? (
+        <AdminWithdrawalsPanel
+          withdrawals={data.withdrawals}
+          handlers={{
+            onApproveWithdrawal: approveWithdrawal,
+            onMarkPaid: markPaid,
+            onRejectWithdrawal: rejectWithdrawal,
+            onCopy: copyText,
+          }}
         />
-        {t("referralEnabled")}
-      </label>
-      <Button type="button" size="sm" onClick={() => onSave(local)}>
-        {t("saveConfig")}
-      </Button>
+      ) : null}
+
+      {activeTab === "disputes" ? (
+        <AdminDisputesPanel
+          disputes={data.disputes}
+          onResolveDispute={resolveDispute}
+        />
+      ) : null}
+
+      {activeTab === "deposits" ? (
+        <AdminDepositsPanel
+          deposits={data.deposits}
+          chainAdapter={data.config.chainAdapter}
+          currentUserId={data.currentUserId}
+          onSimulateDeposit={simulateDeposit}
+        />
+      ) : null}
+
+      {activeTab === "users" ? (
+        <AdminUsersPanel
+          users={data.users}
+          handlers={{
+            onBanUser: banUser,
+            onUnbanUser: unbanUser,
+            onToggleReferral: toggleReferral,
+          }}
+        />
+      ) : null}
+
+      {activeTab === "tasks" ? (
+        <AdminTasksPanel tasks={data.tasks} onTakeDownTask={takeDownTask} />
+      ) : null}
+
+      {activeTab === "config" ? (
+        <AdminConfigPanel config={data.config} onSave={saveConfig} />
+      ) : null}
     </div>
-  );
-}
-
-function AdminList({
-  title,
-  items,
-}: {
-  title: string;
-  items: Array<{
-    id: string;
-    label: string;
-    actions: Array<{ label: string; onClick: () => void }>;
-  }>;
-}) {
-  return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-medium">{title}</h2>
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className="flex items-center justify-between rounded-xl border border-line bg-surface px-4 py-3 text-sm"
-        >
-          <span className="pr-3">{item.label}</span>
-          <div className="flex shrink-0 gap-2">
-            {item.actions.map((action) => (
-              <Button
-                key={action.label}
-                type="button"
-                variant="link"
-                size="sm"
-                onClick={action.onClick}
-              >
-                {action.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-      ))}
-    </section>
   );
 }

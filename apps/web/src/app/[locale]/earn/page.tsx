@@ -19,12 +19,15 @@ export default async function EarnPage({
     inProgress: number;
     pendingReview: number;
     approved: number;
+    rejected: number;
   }>("/v1/joins/summary");
 
   return (
     <main className="space-y-6">
-      <h1 className="font-[family-name:var(--font-display)] text-4xl">{t("title")}</h1>
-      <div className="grid gap-4 sm:grid-cols-3">
+      <h1 className="font-[family-name:var(--font-display)] text-4xl">
+        {t("title")}
+      </h1>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-2xl border border-line bg-surface p-5">
           <p className="text-sm text-muted">{t("inProgress")}</p>
           <p className="mt-2 text-3xl">{summary?.inProgress ?? 0}</p>
@@ -36,6 +39,10 @@ export default async function EarnPage({
         <div className="rounded-2xl border border-line bg-surface p-5">
           <p className="text-sm text-muted">{t("approved")}</p>
           <p className="mt-2 text-3xl">{summary?.approved ?? 0}</p>
+        </div>
+        <div className="rounded-2xl border border-line bg-surface p-5">
+          <p className="text-sm text-muted">{t("rejected")}</p>
+          <p className="mt-2 text-3xl">{summary?.rejected ?? 0}</p>
         </div>
       </div>
       <div className="flex flex-wrap gap-3">

@@ -1,24 +1,33 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
+import { resolveApiErrorMessage } from "@/lib/resolve-api-error";
 
 export function JoinButton({
   taskId,
   label,
   confirmMessage,
+  disabled,
+  disabledReason,
 }: {
   taskId: string;
   label: string;
   confirmMessage: string;
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const router = useRouter();
+  const t = useTranslations("tasks");
+  const tCommon = useTranslations("common");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function join() {
+    if (disabled) return;
     if (!confirm(confirmMessage)) return;
     setLoading(true);
     setError(null);
@@ -30,11 +39,7 @@ export function JoinButton({
       router.push("/earn/joins");
       router.refresh();
     } catch (err) {
-      const message =
-        typeof err === "object" && err && "message" in err
-          ? String((err as { message: string }).message)
-          : "Failed";
-      setError(message);
+      setError(resolveApiErrorMessage(err, tCommon, t("actionFailed")));
     } finally {
       setLoading(false);
     }
@@ -42,9 +47,18 @@ export function JoinButton({
 
   return (
     <div className="space-y-2">
-      <Button type="button" loading={loading} onClick={join}>
+      <Button
+        type="button"
+        loading={loading}
+        disabled={disabled}
+        fullWidth
+        onClick={() => void join()}
+      >
         {label}
       </Button>
+      {disabled && disabledReason ? (
+        <p className="text-sm text-muted">{disabledReason}</p>
+      ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
     </div>
   );

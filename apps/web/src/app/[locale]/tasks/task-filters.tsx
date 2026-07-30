@@ -66,6 +66,7 @@ export function TaskFilters() {
         <span className="text-xs text-muted">{t("filterType")}</span>
         <Select
           aria-label={t("filterType")}
+          placeholder={t("filterTypePlaceholder")}
           value={searchParams.get("type") ?? ""}
           options={[
             { value: "", label: t("filterAll") },
@@ -105,6 +106,7 @@ export function TaskFilters() {
         <span className="text-xs text-muted">{t("filterLanguage")}</span>
         <Select
           aria-label={t("filterLanguage")}
+          placeholder={t("filterLanguagePlaceholder")}
           value={searchParams.get("languageTag") ?? ""}
           options={[
             { value: "", label: t("filterAll") },
@@ -122,6 +124,7 @@ export function TaskFilters() {
         <span className="text-xs text-muted">{t("filterSort")}</span>
         <Select
           aria-label={t("filterSort")}
+          placeholder={t("filterSortPlaceholder")}
           value={searchParams.get("sort") ?? "newest"}
           options={[
             { value: "newest", label: t("sortNewest") },

@@ -82,10 +82,15 @@ export function createApp(config: AppConfig = loadConfig()) {
       service: "api",
       app: APP_NAME,
     }))
-    .get(`${API_PREFIX}/public/meta`, () => ({
-      name: APP_NAME,
-      version: "0.0.1",
-    }))
+    .get(`${API_PREFIX}/public/meta`, async () => {
+      const { getPlatformSettings } = await import("./services/config");
+      const settings = await getPlatformSettings();
+      return {
+        name: APP_NAME,
+        version: "0.0.1",
+        platformFeeRateBps: settings.platformFeeRateBps,
+      };
+    })
     .use(authModule(config))
     .use(meModule(config))
     .use(publicModule(config))

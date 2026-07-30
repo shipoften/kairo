@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
+import { resolveApiErrorMessage } from "@/lib/resolve-api-error";
 
 export function SubmitProofForm({
   joinId,
@@ -14,10 +15,12 @@ export function SubmitProofForm({
   proofSchema: Record<string, unknown>;
 }) {
   const t = useTranslations("earn");
+  const tCommon = useTranslations("common");
   const router = useRouter();
   const [proofUrl, setProofUrl] = useState("");
   const [note, setNote] = useState("");
   const [screenshot, setScreenshot] = useState("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fields = Object.keys(proofSchema);
@@ -28,6 +31,7 @@ export function SubmitProofForm({
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
+    setLoading(true);
     try {
       const proofPayload: Record<string, string> = {};
       if (showUrl) proofPayload.proofUrl = proofUrl;
@@ -40,16 +44,17 @@ export function SubmitProofForm({
       router.push("/earn/joins");
       router.refresh();
     } catch (err) {
-      setError(
-        typeof err === "object" && err && "message" in err
-          ? String((err as { message: string }).message)
-          : "Failed",
-      );
+      setError(resolveApiErrorMessage(err, tCommon, t("actionFailed")));
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-line bg-surface p-6">
+    <form
+      onSubmit={(event) => void onSubmit(event)}
+      className="space-y-4 rounded-2xl border border-line bg-surface p-6"
+    >
       {showUrl ? (
         <label className="block space-y-1 text-sm">
           <span>{t("proofUrl")}</span>
@@ -57,6 +62,7 @@ export function SubmitProofForm({
             className="w-full rounded-xl border border-line px-3 py-2"
             value={proofUrl}
             onChange={(event) => setProofUrl(event.target.value)}
+            placeholder={t("proofUrlPlaceholder")}
             required
           />
         </label>
@@ -68,7 +74,7 @@ export function SubmitProofForm({
             className="w-full rounded-xl border border-line px-3 py-2"
             value={screenshot}
             onChange={(event) => setScreenshot(event.target.value)}
-            placeholder="https://"
+            placeholder={t("proofUrlPlaceholder")}
           />
         </label>
       ) : null}
@@ -84,7 +90,9 @@ export function SubmitProofForm({
         </label>
       ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
-      <Button type="submit">{t("submit")}</Button>
+      <Button type="submit" loading={loading}>
+        {t("submit")}
+      </Button>
     </form>
   );
 }

@@ -273,6 +273,66 @@ export async function creditOnChainDeposit(input: {
   });
 }
 
+export async function registerDepositTx(input: {
+  userId: string;
+  txHash: string;
+}) {
+  const txHash = input.txHash.trim();
+  if (!txHash || txHash.length < 16) {
+    throw validation("Invalid transaction hash");
+  }
+
+  const db = getDb();
+  const existing = await db.query.deposits.findFirst({
+    where: eq(deposits.txHash, txHash),
+  });
+  if (existing) {
+    if (existing.userId !== input.userId) {
+      throw conflict("Transaction already registered to another user");
+    }
+    return {
+      deposit: existing,
+      credited: existing.status === DepositStatus.confirmed,
+    };
+  }
+
+  const addressRow = await ensureDepositAddress(input.userId);
+  const adapter = getChainAdapter();
+  const settings = await getPlatformSettings();
+  const transfer = await adapter.getIncomingUsdtByTxHash(
+    txHash,
+    addressRow.address,
+  );
+  if (!transfer) {
+    throw notFound("Transaction not found yet");
+  }
+  if (transfer.toAddress !== addressRow.address) {
+    throw conflict("Transaction is not sent to your deposit address");
+  }
+
+  const result = await creditOnChainDeposit({
+    userId: input.userId,
+    address: addressRow.address,
+    txHash: transfer.txHash,
+    fromAddress: transfer.fromAddress,
+    amountMicros: transfer.amountMicros,
+    confirmations: transfer.confirmations,
+    requiredConfirmations: settings.trc20Confirmations,
+    chain: addressRow.chain,
+  });
+
+  if (result.credited) {
+    await notifyUser({
+      userId: input.userId,
+      type: "deposit_confirmed",
+      title: "Deposit confirmed",
+      body: `Your deposit of ${formatUsdt(transfer.amountMicros)} USDT was confirmed.`,
+    });
+  }
+
+  return result;
+}
+
 export async function simulateDeposit(input: {
   userId: string;
   amountMicros: number;
@@ -418,6 +478,14 @@ export async function approveWithdraw(input: {
     })
     .where(eq(withdrawals.id, row.id))
     .returning();
+
+  await notifyUser({
+    userId: row.userId,
+    type: "withdrawal_approved",
+    title: "Withdrawal approved",
+    body: `Your withdrawal of ${formatUsdt(row.netPayoutMicros)} USDT was approved and is awaiting on-chain payout.`,
+    payload: { withdrawalId: row.id },
+  });
 
   return updated;
 }

@@ -96,6 +96,7 @@ export function SettingsForm({
             id="settings-display-name"
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
+            placeholder={t("displayNamePlaceholder")}
           />
         </div>
         <div className="flex flex-wrap gap-2 text-sm">

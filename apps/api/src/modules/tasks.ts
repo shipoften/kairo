@@ -42,12 +42,28 @@ function publicTask(task: typeof tasks.$inferSelect, publisherName?: string) {
   };
 }
 
+function assertTaskJoinable(task: typeof tasks.$inferSelect) {
+  if (task.status !== TaskStatus.recruiting) {
+    throw new AppError(ErrorCode.TASK_NOT_OPEN, "Task not open for joins", 409);
+  }
+  if (task.endsAt && task.endsAt.getTime() <= Date.now()) {
+    throw new AppError(ErrorCode.TASK_EXPIRED, "Task deadline has passed", 409);
+  }
+  if (task.remainingQuota <= 0) {
+    throw new AppError(ErrorCode.QUOTA_FULL, "Task quota full", 409);
+  }
+}
+
 export function publicModule(_config: AppConfig) {
   return new Elysia({ prefix: `${API_PREFIX}/public` })
-  .get("/meta", () => ({
-    name: APP_NAME,
-    version: "0.0.1",
-  }))
+  .get("/meta", async () => {
+    const settings = await getPlatformSettings();
+    return {
+      name: APP_NAME,
+      version: "0.0.1",
+      platformFeeRateBps: settings.platformFeeRateBps,
+    };
+  })
   .get(
     "/tasks",
     async ({ query }) => {
@@ -151,6 +167,7 @@ export function publicModule(_config: AppConfig) {
         ...publicTask(task, publisher?.displayName),
         proofSchema: task.proofSchema,
         submitDeadlineHours: task.submitDeadlineHours,
+        reviewDeadlineHours: task.reviewDeadlineHours,
         allowResubmit: task.allowResubmit,
       };
     },
@@ -225,7 +242,7 @@ export function tasksModule(config: AppConfig) {
           unitPriceMicros: body.unitPriceMicros,
           totalQuota: body.totalQuota,
           remainingQuota: body.totalQuota,
-          status: body.publish ? TaskStatus.draft : TaskStatus.draft,
+          status: TaskStatus.draft,
           languageTag: body.languageTag ?? "en",
           submitDeadlineHours: body.submitDeadlineHours ?? 72,
           reviewDeadlineHours: body.reviewDeadlineHours ?? 72,
@@ -312,12 +329,38 @@ export function tasksModule(config: AppConfig) {
       }
       if (task.status !== TaskStatus.draft) {
         if (body.status) {
-          const allowed = [TaskStatus.paused, TaskStatus.recruiting, TaskStatus.ended];
-          if (!allowed.includes(body.status as never)) {
+          const allowedTargets = [
+            TaskStatus.paused,
+            TaskStatus.recruiting,
+            TaskStatus.ended,
+          ];
+          if (!allowedTargets.includes(body.status as never)) {
             throw validation("Invalid status transition");
           }
+          const canEndFrom = [
+            TaskStatus.recruiting,
+            TaskStatus.paused,
+            TaskStatus.full,
+          ];
           if (body.status === TaskStatus.ended) {
+            if (!canEndFrom.includes(task.status as never)) {
+              throw conflict("Task cannot be ended from current status");
+            }
             await releaseTaskHoldRemaining(task.id);
+          }
+          if (
+            body.status === TaskStatus.paused &&
+            task.status !== TaskStatus.recruiting &&
+            task.status !== TaskStatus.paused
+          ) {
+            throw conflict("Only recruiting tasks can be paused");
+          }
+          if (
+            body.status === TaskStatus.recruiting &&
+            task.status !== TaskStatus.paused &&
+            task.status !== TaskStatus.recruiting
+          ) {
+            throw conflict("Only paused tasks can resume recruiting");
           }
           const [updated] = await db
             .update(tasks)
@@ -365,7 +408,23 @@ export function tasksModule(config: AppConfig) {
         where: eq(joins.taskId, task.id),
         orderBy: [desc(joins.createdAt)],
       });
-      return { items };
+      const earnerIds = [...new Set(items.map((item) => item.earnerId))];
+      const earners =
+        earnerIds.length > 0
+          ? await db.query.users.findMany({
+              where: inArray(users.id, earnerIds),
+            })
+          : [];
+      const nameById = new Map(
+        earners.map((earner) => [earner.id, earner.displayName]),
+      );
+      return {
+        items: items.map((item) => ({
+          ...item,
+          earnerName: nameById.get(item.earnerId) ?? null,
+        })),
+        allowResubmit: task.allowResubmit,
+      };
     },
     { params: t.Object({ id: t.String() }) },
   );
@@ -385,6 +444,7 @@ export function joinsModule(config: AppConfig) {
       inProgress: items.filter((item) => item.status === JoinStatus.joined).length,
       pendingReview: items.filter((item) => item.status === JoinStatus.submitted).length,
       approved: items.filter((item) => item.status === JoinStatus.approved).length,
+      rejected: items.filter((item) => item.status === JoinStatus.rejected).length,
     };
   })
   .get("/", async ({ request, query }) => {
@@ -403,9 +463,13 @@ export function joinsModule(config: AppConfig) {
           })
         : [];
     const titleById = new Map(taskRows.map((task) => [task.id, task.title]));
+    const allowResubmitById = new Map(
+      taskRows.map((task) => [task.id, task.allowResubmit]),
+    );
     const enriched = items.map((item) => ({
       ...item,
       taskTitle: titleById.get(item.taskId) ?? null,
+      allowResubmit: allowResubmitById.get(item.taskId) ?? true,
     }));
     if (query.status) {
       return {
@@ -436,12 +500,7 @@ export function joinsModule(config: AppConfig) {
           403,
         );
       }
-      if (task.status !== TaskStatus.recruiting) {
-        throw new AppError(ErrorCode.TASK_NOT_OPEN, "Task not open for joins", 409);
-      }
-      if (task.remainingQuota <= 0) {
-        throw new AppError(ErrorCode.QUOTA_FULL, "Task quota full", 409);
-      }
+      assertTaskJoinable(task);
 
       const existing = await db.query.joins.findFirst({
         where: and(eq(joins.taskId, task.id), eq(joins.earnerId, current.id)),
@@ -524,6 +583,31 @@ export function joinsModule(config: AppConfig) {
         where: eq(tasks.id, join.taskId),
       });
       if (!task) throw notFound("Task not found");
+      if (
+        task.status === TaskStatus.ended ||
+        task.status === TaskStatus.taken_down ||
+        (task.endsAt && task.endsAt.getTime() <= Date.now())
+      ) {
+        throw new AppError(ErrorCode.TASK_EXPIRED, "Task deadline has passed", 409);
+      }
+      if (join.status === JoinStatus.rejected && !task.allowResubmit) {
+        throw new AppError(
+          ErrorCode.RESUBMIT_FORBIDDEN,
+          "Resubmit is not allowed for this task",
+          409,
+        );
+      }
+      if (
+        join.status === JoinStatus.joined &&
+        join.submitDeadlineAt &&
+        join.submitDeadlineAt.getTime() < Date.now()
+      ) {
+        throw new AppError(
+          ErrorCode.SUBMIT_DEADLINE_PASSED,
+          "Submit deadline has passed",
+          409,
+        );
+      }
 
       const now = new Date();
       const [updated] = await db
@@ -532,6 +616,10 @@ export function joinsModule(config: AppConfig) {
           status: JoinStatus.submitted,
           proofPayload: body.proofPayload,
           submittedAt: now,
+          submitDeadlineAt:
+            join.status === JoinStatus.rejected
+              ? addHours(now, task.submitDeadlineHours)
+              : join.submitDeadlineAt,
           reviewDeadlineAt: addHours(now, task.reviewDeadlineHours),
           updatedAt: now,
           rejectReason: null,

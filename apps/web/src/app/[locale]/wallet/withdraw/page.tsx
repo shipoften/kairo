@@ -168,6 +168,7 @@ export default function WithdrawPage() {
             step="0.01"
             value={amountUsdt}
             onChange={(event) => setAmountUsdt(Number(event.target.value))}
+            placeholder={t("amountPlaceholder")}
           />
         </div>
         <div className="space-y-1">
@@ -178,6 +179,7 @@ export default function WithdrawPage() {
             className="font-mono"
             value={toAddress}
             onChange={(event) => setToAddress(event.target.value)}
+            placeholder={t("toAddressPlaceholder")}
             required
           />
         </div>

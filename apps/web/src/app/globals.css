@@ -28,10 +28,82 @@ body {
     radial-gradient(circle at 92% 10%, rgba(107, 29, 71, 0.08), transparent 40%),
     linear-gradient(180deg, #fcf8f6 0%, #f5eeea 100%);
   color: var(--foreground);
-  font-family: var(--font-body), sans-serif;
+  font-family:
+    var(--font-body),
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif;
   min-height: 100vh;
 }
 
 a {
   text-decoration: none;
+}
+
+.legal-prose {
+  color: var(--foreground);
+  line-height: 1.75;
+}
+
+.legal-prose h1 {
+  font-family: var(--font-display), serif;
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin: 0 0 1rem;
+}
+
+.legal-prose h2 {
+  font-family: var(--font-display), serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  margin: 2.25rem 0 0.75rem;
+}
+
+.legal-prose h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.legal-prose p,
+.legal-prose ul,
+.legal-prose ol {
+  margin: 0 0 1rem;
+  color: color-mix(in srgb, var(--foreground) 88%, var(--muted));
+}
+
+.legal-prose ul,
+.legal-prose ol {
+  padding-left: 1.25rem;
+}
+
+.legal-prose li {
+  margin: 0.35rem 0;
+}
+
+.legal-prose li::marker {
+  color: var(--muted);
+}
+
+.legal-prose strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.legal-prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 2rem 0;
+}
+
+.legal-prose a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }

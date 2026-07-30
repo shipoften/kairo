@@ -5,7 +5,8 @@ import { LedgerType, TaskStatus } from "@xs-share/shared";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
 import { getDb } from "../lib/db";
-import { resetChainAdapterForTests } from "../services/chain";
+import { resetChainAdapterForTests, getMockChainAdapter } from "../services/chain";
+import { runTimeoutSweep } from "../workers/timeout";
 
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
@@ -83,6 +84,8 @@ async function createPublishedTask(
     title: string;
     unitPriceMicros?: number;
     totalQuota?: number;
+    endsAt?: string;
+    allowResubmit?: boolean;
   },
 ) {
   const response = await app.handle(
@@ -99,6 +102,8 @@ async function createPublishedTask(
         targetUrl: "https://x.com/example",
         unitPriceMicros: input.unitPriceMicros ?? 1_000_000,
         totalQuota: input.totalQuota ?? 2,
+        endsAt: input.endsAt,
+        allowResubmit: input.allowResubmit,
         publish: true,
       }),
     }),
@@ -543,5 +548,394 @@ describe.skipIf(!hasDatabase)("api integration", () => {
       }),
     );
     expect(bannedRelogin.status).toBe(403);
+  });
+
+  test("task deadline join block, auto-end, full end, and resubmit", async () => {
+    resetChainAdapterForTests();
+    const stamp = Date.now() + 2;
+
+    const publisher = await devLogin(app, {
+      externalId: `pub3-${stamp}`,
+      displayName: "Publisher Three",
+    });
+    await makeAdmin(publisher.user.id);
+    await simulateDeposit(app, publisher.cookie, {
+      userId: publisher.user.id,
+      amountMicros: 40_000_000,
+    });
+
+    const expiredTask = await createPublishedTask(app, publisher.cookie, {
+      title: "Already ended by deadline",
+      totalQuota: 1,
+      endsAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+
+    const earner = await devLogin(app, {
+      externalId: `earn3-${stamp}`,
+      displayName: "Earner Three",
+    });
+
+    const joinExpired = await app.handle(
+      new Request("http://localhost/v1/joins", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({ taskId: expiredTask.task.id }),
+      }),
+    );
+    expect(joinExpired.status).toBe(409);
+
+    await runTimeoutSweep();
+    const endedDetail = await app.handle(
+      new Request(`http://localhost/v1/public/tasks/${expiredTask.task.id}`),
+    );
+    expect(endedDetail.status).toBe(404);
+
+    const fullTask = await createPublishedTask(app, publisher.cookie, {
+      title: "Full then end",
+      totalQuota: 1,
+      unitPriceMicros: 1_000_000,
+    });
+    const joinFull = await app.handle(
+      new Request("http://localhost/v1/joins", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({ taskId: fullTask.task.id }),
+      }),
+    );
+    expect(joinFull.status).toBe(200);
+
+    const walletBeforeFullEnd = await getWallet(app, publisher.cookie);
+    const endFull = await app.handle(
+      new Request(`http://localhost/v1/tasks/${fullTask.task.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie: publisher.cookie,
+        },
+        body: JSON.stringify({ status: TaskStatus.ended }),
+      }),
+    );
+    expect(endFull.status).toBe(200);
+    const walletAfterFullEnd = await getWallet(app, publisher.cookie);
+    expect(walletAfterFullEnd.availableMicros).toBe(
+      walletBeforeFullEnd.availableMicros + 1_000_000,
+    );
+
+    const resubmitTask = await createPublishedTask(app, publisher.cookie, {
+      title: "Resubmit allowed",
+      totalQuota: 1,
+      allowResubmit: true,
+    });
+    const joinResubmit = await app.handle(
+      new Request("http://localhost/v1/joins", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({ taskId: resubmitTask.task.id }),
+      }),
+    );
+    const joinResubmitBody = await json<{ join: { id: string } }>(joinResubmit);
+    expect(joinResubmit.status).toBe(200);
+
+    await app.handle(
+      new Request(
+        `http://localhost/v1/joins/${joinResubmitBody.join.id}/submit`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: earner.cookie,
+          },
+          body: JSON.stringify({
+            proofPayload: { proofUrl: "https://x.com/first" },
+          }),
+        },
+      ),
+    );
+    await app.handle(
+      new Request(
+        `http://localhost/v1/reviews/${joinResubmitBody.join.id}/reject`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: publisher.cookie,
+          },
+          body: JSON.stringify({ reason: "Try again" }),
+        },
+      ),
+    );
+
+    const resubmit = await app.handle(
+      new Request(
+        `http://localhost/v1/joins/${joinResubmitBody.join.id}/submit`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: earner.cookie,
+          },
+          body: JSON.stringify({
+            proofPayload: { proofUrl: "https://x.com/second" },
+          }),
+        },
+      ),
+    );
+    expect(resubmit.status).toBe(200);
+  });
+
+  test("dispute open, duplicate block, and admin resolve approve", async () => {
+    resetChainAdapterForTests();
+    const stamp = Date.now() + 3;
+
+    const publisher = await devLogin(app, {
+      externalId: `pub-dispute-${stamp}`,
+      displayName: "Publisher Dispute",
+    });
+    await makeAdmin(publisher.user.id);
+    await simulateDeposit(app, publisher.cookie, {
+      userId: publisher.user.id,
+      amountMicros: 30_000_000,
+    });
+
+    const task = await createPublishedTask(app, publisher.cookie, {
+      title: "Dispute flow task",
+      totalQuota: 1,
+      unitPriceMicros: 2_000_000,
+    });
+
+    const earner = await devLogin(app, {
+      externalId: `earn-dispute-${stamp}`,
+      displayName: "Earner Dispute",
+    });
+
+    const joinResponse = await app.handle(
+      new Request("http://localhost/v1/joins", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({ taskId: task.task.id }),
+      }),
+    );
+    expect(joinResponse.status).toBe(200);
+    const joinBody = await json<{ join: { id: string } }>(joinResponse);
+
+    const submit = await app.handle(
+      new Request(`http://localhost/v1/joins/${joinBody.join.id}/submit`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({
+          proofPayload: { proofUrl: "https://x.com/dispute-proof" },
+        }),
+      }),
+    );
+    expect(submit.status).toBe(200);
+
+    const openDispute = await app.handle(
+      new Request("http://localhost/v1/disputes", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: earner.cookie,
+        },
+        body: JSON.stringify({
+          joinId: joinBody.join.id,
+          reason: "Publisher ignored my valid proof",
+        }),
+      }),
+    );
+    expect(openDispute.status).toBe(200);
+    const disputeBody = await json<{ dispute: { id: string } }>(openDispute);
+
+    const duplicate = await app.handle(
+      new Request("http://localhost/v1/disputes", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: publisher.cookie,
+        },
+        body: JSON.stringify({
+          joinId: joinBody.join.id,
+          reason: "Duplicate should fail",
+        }),
+      }),
+    );
+    expect(duplicate.status).toBe(409);
+    const duplicateBody = await json<{ code: string }>(duplicate);
+    expect(duplicateBody.code).toBe("DISPUTE_ALREADY_OPEN");
+
+    const walletBefore = await getWallet(app, earner.cookie);
+    const resolve = await app.handle(
+      new Request(
+        `http://localhost/v1/admin/disputes/${disputeBody.dispute.id}/resolve`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: publisher.cookie,
+          },
+          body: JSON.stringify({
+            decision: "approve",
+            note: "Proof looks valid",
+          }),
+        },
+      ),
+    );
+    expect(resolve.status).toBe(200);
+
+    const walletAfter = await getWallet(app, earner.cookie);
+    expect(walletAfter.availableMicros).toBe(
+      walletBefore.availableMicros + 2_000_000,
+    );
+
+    const list = await app.handle(
+      new Request("http://localhost/v1/admin/disputes", {
+        headers: { cookie: publisher.cookie },
+      }),
+    );
+    expect(list.status).toBe(200);
+    const listBody = await json<{
+      items: Array<{
+        id: string;
+        status: string;
+        taskTitle: string | null;
+        resolutionNote: string | null;
+      }>;
+    }>(list);
+    const resolved = listBody.items.find(
+      (item) => item.id === disputeBody.dispute.id,
+    );
+    expect(resolved?.status).toBe("resolved_approve");
+    expect(resolved?.taskTitle).toBe("Dispute flow task");
+    expect(resolved?.resolutionNote).toBe("Proof looks valid");
+  });
+
+  test("register deposit tx via wallet connect path", async () => {
+    resetChainAdapterForTests();
+    const mock = getMockChainAdapter();
+    const stamp = Date.now();
+
+    const depositor = await devLogin(app, {
+      externalId: `dep-${stamp}`,
+      displayName: "Depositor",
+    });
+    const other = await devLogin(app, {
+      externalId: `other-${stamp}`,
+      displayName: "Other",
+    });
+
+    const addressResponse = await app.handle(
+      new Request("http://localhost/v1/wallet/deposit-address", {
+        headers: { cookie: depositor.cookie },
+      }),
+    );
+    expect(addressResponse.status).toBe(200);
+    const addressBody = await json<{ address: string }>(addressResponse);
+
+    const txHash = `mock_register_${stamp}_${"x".repeat(8)}`;
+    mock.injectIncoming({
+      txHash,
+      fromAddress: "TMockSender000000000000000000000001",
+      toAddress: addressBody.address,
+      amountMicros: 15_000_000,
+      confirmations: 20,
+      blockTimestamp: new Date(),
+    });
+
+    const registerResponse = await app.handle(
+      new Request("http://localhost/v1/wallet/deposits/register", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: depositor.cookie,
+        },
+        body: JSON.stringify({ txHash }),
+      }),
+    );
+    expect(registerResponse.status).toBe(200);
+    const registerBody = await json<{ credited: boolean; deposit: { status: string } }>(
+      registerResponse,
+    );
+    expect(registerBody.credited).toBe(true);
+    expect(registerBody.deposit.status).toBe("confirmed");
+
+    const walletAfter = await getWallet(app, depositor.cookie);
+    expect(walletAfter.availableMicros).toBe(15_000_000);
+
+    const registerAgain = await app.handle(
+      new Request("http://localhost/v1/wallet/deposits/register", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: depositor.cookie,
+        },
+        body: JSON.stringify({ txHash }),
+      }),
+    );
+    expect(registerAgain.status).toBe(200);
+    const againBody = await json<{ credited: boolean }>(registerAgain);
+    expect(againBody.credited).toBe(true);
+
+    const otherRegister = await app.handle(
+      new Request("http://localhost/v1/wallet/deposits/register", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: other.cookie,
+        },
+        body: JSON.stringify({ txHash }),
+      }),
+    );
+    expect(otherRegister.status).toBe(409);
+
+    const wrongTxHash = `mock_wrong_addr_${stamp}_${"y".repeat(8)}`;
+    const otherAddressResponse = await app.handle(
+      new Request("http://localhost/v1/wallet/deposit-address", {
+        headers: { cookie: other.cookie },
+      }),
+    );
+    const otherAddressBody = await json<{ address: string }>(otherAddressResponse);
+    mock.injectIncoming({
+      txHash: wrongTxHash,
+      fromAddress: "TMockSender000000000000000000000001",
+      toAddress: otherAddressBody.address,
+      amountMicros: 15_000_000,
+      confirmations: 20,
+      blockTimestamp: new Date(),
+    });
+
+    const wrongRegister = await app.handle(
+      new Request("http://localhost/v1/wallet/deposits/register", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: depositor.cookie,
+        },
+        body: JSON.stringify({ txHash: wrongTxHash }),
+      }),
+    );
+    expect(wrongRegister.status).toBe(404);
+
+    const getDeposit = await app.handle(
+      new Request(`http://localhost/v1/wallet/deposits/${txHash}`, {
+        headers: { cookie: depositor.cookie },
+      }),
+    );
+    expect(getDeposit.status).toBe(200);
+    const getBody = await json<{ deposit: { txHash: string } }>(getDeposit);
+    expect(getBody.deposit.txHash).toBe(txHash);
   });
 });

@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import {
   deposits,
@@ -15,19 +15,22 @@ import {
 import {
   API_PREFIX,
   DisputeStatus,
+  ErrorCode,
   JoinStatus,
   TaskStatus,
+  WithdrawalStatus,
 } from "@xs-share/shared";
 import type { AppConfig } from "../config";
 import { requireAdmin, requireUser } from "../lib/auth";
 import { authFromRequest } from "../lib/request-auth";
 import { getDb } from "../lib/db";
-import { conflict, notFound, validation } from "../lib/errors";
+import { AppError, conflict, notFound, validation } from "../lib/errors";
 import {
   approveJoin,
   approveWithdraw,
   ensureDepositAddress,
   markWithdrawPaid,
+  registerDepositTx,
   rejectJoin,
   rejectWithdraw,
   releaseTaskHoldRemaining,
@@ -39,6 +42,16 @@ import {
   updatePlatformSettings,
 } from "../services/config";
 import { getChainAdapter } from "../services/chain";
+import { notifyUser } from "../services/notify";
+
+async function userNameById(userIds: string[]) {
+  if (userIds.length === 0) return new Map<string, string>();
+  const db = getDb();
+  const userRows = await db.query.users.findMany({
+    where: inArray(users.id, userIds),
+  });
+  return new Map(userRows.map((row) => [row.id, row.displayName]));
+}
 
 export function walletModule(config: AppConfig) {
   return new Elysia({ prefix: `${API_PREFIX}/wallet` })
@@ -96,6 +109,40 @@ export function walletModule(config: AppConfig) {
       });
       return { items };
     })
+    .get(
+      "/deposits/:txHash",
+      async ({ request, params }) => {
+        const { user } = await authFromRequest(request, config.SESSION_SECRET);
+        const current = requireUser(user);
+        const db = getDb();
+        const row = await db.query.deposits.findFirst({
+          where: and(
+            eq(deposits.userId, current.id),
+            eq(deposits.txHash, params.txHash),
+          ),
+        });
+        if (!row) throw notFound("Deposit not found");
+        return { deposit: row };
+      },
+      { params: t.Object({ txHash: t.String() }) },
+    )
+    .post(
+      "/deposits/register",
+      async ({ request, body }) => {
+        const { user } = await authFromRequest(request, config.SESSION_SECRET);
+        const current = requireUser(user);
+        const result = await registerDepositTx({
+          userId: current.id,
+          txHash: body.txHash,
+        });
+        return result;
+      },
+      {
+        body: t.Object({
+          txHash: t.String({ minLength: 16 }),
+        }),
+      },
+    )
     .get("/withdrawals", async ({ request }) => {
       const { user } = await authFromRequest(request, config.SESSION_SECRET);
       const current = requireUser(user);
@@ -243,14 +290,32 @@ export function disputesModule(config: AppConfig) {
         where: eq(joins.id, body.joinId),
       });
       if (!join) throw notFound("Join not found");
-      if (join.earnerId !== current.id && current.role !== "admin") {
-        const task = await db.query.tasks.findFirst({
-          where: eq(tasks.id, join.taskId),
-        });
-        if (!task || task.publisherId !== current.id) {
-          throw notFound("Join not found");
-        }
+
+      const task = await db.query.tasks.findFirst({
+        where: eq(tasks.id, join.taskId),
+      });
+      if (!task) throw notFound("Join not found");
+
+      const isEarner = join.earnerId === current.id;
+      const isPublisher = task.publisherId === current.id;
+      if (!isEarner && !isPublisher && current.role !== "admin") {
+        throw notFound("Join not found");
       }
+
+      const existingOpen = await db.query.disputes.findFirst({
+        where: and(
+          eq(disputes.joinId, join.id),
+          eq(disputes.status, DisputeStatus.open),
+        ),
+      });
+      if (existingOpen) {
+        throw new AppError(
+          ErrorCode.DISPUTE_ALREADY_OPEN,
+          "An open dispute already exists for this join",
+          409,
+        );
+      }
+
       if (
         join.status !== JoinStatus.submitted &&
         join.status !== JoinStatus.rejected
@@ -267,11 +332,23 @@ export function disputesModule(config: AppConfig) {
           status: DisputeStatus.open,
         })
         .returning();
+      if (!row) throw conflict("Failed to create dispute");
 
       await db
         .update(joins)
         .set({ status: JoinStatus.disputed, updatedAt: new Date() })
         .where(eq(joins.id, join.id));
+
+      const counterpartyId = isEarner ? task.publisherId : join.earnerId;
+      if (counterpartyId !== current.id) {
+        await notifyUser({
+          userId: counterpartyId,
+          type: "dispute_opened",
+          title: "Dispute opened",
+          body: `A dispute was opened on "${task.title}".`,
+          payload: { disputeId: row.id, joinId: join.id, taskId: task.id },
+        });
+      }
 
       return { dispute: row };
     },
@@ -286,6 +363,63 @@ export function disputesModule(config: AppConfig) {
 
 export function adminModule(config: AppConfig) {
   return new Elysia({ prefix: `${API_PREFIX}/admin` })
+    .get("/overview", async ({ request }) => {
+      const { user } = await authFromRequest(request, config.SESSION_SECRET);
+      requireAdmin(user);
+      const db = getDb();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const [
+        pendingWithdrawalStats,
+        openDisputeStats,
+        todayDepositStats,
+        activeTaskStats,
+        totalUserStats,
+      ] = await Promise.all([
+        db
+          .select({
+            count: count(),
+            amountMicros: sql<number>`coalesce(sum(${withdrawals.amountMicros}), 0)::int`,
+          })
+          .from(withdrawals)
+          .where(eq(withdrawals.status, WithdrawalStatus.pending)),
+        db
+          .select({ count: count() })
+          .from(disputes)
+          .where(eq(disputes.status, DisputeStatus.open)),
+        db
+          .select({
+            count: count(),
+            amountMicros: sql<number>`coalesce(sum(${deposits.amountMicros}), 0)::int`,
+          })
+          .from(deposits)
+          .where(gte(deposits.createdAt, startOfToday)),
+        db
+          .select({ count: count() })
+          .from(tasks)
+          .where(
+            or(
+              eq(tasks.status, TaskStatus.recruiting),
+              eq(tasks.status, TaskStatus.paused),
+              eq(tasks.status, TaskStatus.full),
+            ),
+          ),
+        db.select({ count: count() }).from(users),
+      ]);
+
+      return {
+        pendingWithdrawals: pendingWithdrawalStats[0]?.count ?? 0,
+        pendingWithdrawalAmountMicros:
+          pendingWithdrawalStats[0]?.amountMicros ?? 0,
+        openDisputes: openDisputeStats[0]?.count ?? 0,
+        todayDeposits: todayDepositStats[0]?.count ?? 0,
+        todayDepositAmountMicros: todayDepositStats[0]?.amountMicros ?? 0,
+        activeTasks: activeTaskStats[0]?.count ?? 0,
+        totalUsers: totalUserStats[0]?.count ?? 0,
+        chainAdapter: getChainAdapter().name,
+      };
+    })
     .get("/users", async ({ request }) => {
       const { user } = await authFromRequest(request, config.SESSION_SECRET);
       requireAdmin(user);
@@ -381,7 +515,13 @@ export function adminModule(config: AppConfig) {
         orderBy: [desc(deposits.createdAt)],
         limit: 200,
       });
-      return { items };
+      const nameById = await userNameById([...new Set(items.map((item) => item.userId))]);
+      return {
+        items: items.map((item) => ({
+          ...item,
+          userName: nameById.get(item.userId) ?? null,
+        })),
+      };
     })
     .post(
       "/deposits/simulate",
@@ -419,7 +559,13 @@ export function adminModule(config: AppConfig) {
         orderBy: [desc(withdrawals.createdAt)],
         limit: 200,
       });
-      return { items };
+      const nameById = await userNameById([...new Set(items.map((item) => item.userId))]);
+      return {
+        items: items.map((item) => ({
+          ...item,
+          userName: nameById.get(item.userId) ?? null,
+        })),
+      };
     })
     .post(
       "/withdrawals/:id/approve",
@@ -476,7 +622,60 @@ export function adminModule(config: AppConfig) {
         orderBy: [desc(disputes.createdAt)],
         limit: 200,
       });
-      return { items };
+      const joinIds = [...new Set(items.map((item) => item.joinId))];
+      const joinRows =
+        joinIds.length > 0
+          ? await db.query.joins.findMany({
+              where: inArray(joins.id, joinIds),
+            })
+          : [];
+      const joinById = new Map(joinRows.map((row) => [row.id, row]));
+      const taskIds = [
+        ...new Set(joinRows.map((row) => row.taskId).filter(Boolean)),
+      ];
+      const taskRows =
+        taskIds.length > 0
+          ? await db.query.tasks.findMany({
+              where: inArray(tasks.id, taskIds),
+            })
+          : [];
+      const taskById = new Map(taskRows.map((row) => [row.id, row]));
+      const userIds = [
+        ...new Set([
+          ...items.map((item) => item.openedByUserId),
+          ...joinRows.map((row) => row.earnerId),
+          ...taskRows.map((row) => row.publisherId),
+        ]),
+      ];
+      const userRows =
+        userIds.length > 0
+          ? await db.query.users.findMany({
+              where: inArray(users.id, userIds),
+            })
+          : [];
+      const nameById = new Map(
+        userRows.map((row) => [row.id, row.displayName]),
+      );
+
+      return {
+        items: items.map((item) => {
+          const join = joinById.get(item.joinId);
+          const task = join ? taskById.get(join.taskId) : undefined;
+          return {
+            ...item,
+            taskId: task?.id ?? null,
+            taskTitle: task?.title ?? null,
+            earnerId: join?.earnerId ?? null,
+            earnerName: join ? (nameById.get(join.earnerId) ?? null) : null,
+            publisherId: task?.publisherId ?? null,
+            publisherName: task
+              ? (nameById.get(task.publisherId) ?? null)
+              : null,
+            openedByName: nameById.get(item.openedByUserId) ?? null,
+            joinStatus: join?.status ?? null,
+          };
+        }),
+      };
     })
     .post(
       "/disputes/:id/resolve",
@@ -491,6 +690,21 @@ export function adminModule(config: AppConfig) {
           throw conflict("Dispute not open");
         }
 
+        const join = await db.query.joins.findFirst({
+          where: eq(joins.id, dispute.joinId),
+        });
+        if (!join) throw notFound("Join not found");
+        const task = await db.query.tasks.findFirst({
+          where: eq(tasks.id, join.taskId),
+        });
+        if (!task) throw notFound("Task not found");
+
+        const note =
+          body.note?.trim() ||
+          (body.decision === "approve"
+            ? "Approved by admin dispute resolution"
+            : "Rejected by admin dispute resolution");
+
         if (body.decision === "approve") {
           await approveJoin({
             joinId: dispute.joinId,
@@ -501,7 +715,7 @@ export function adminModule(config: AppConfig) {
             .update(disputes)
             .set({
               status: DisputeStatus.resolved_approve,
-              resolutionNote: body.note,
+              resolutionNote: note,
               resolvedByUserId: admin.id,
               resolvedAt: new Date(),
             })
@@ -510,19 +724,39 @@ export function adminModule(config: AppConfig) {
           await rejectJoin({
             joinId: dispute.joinId,
             reviewerId: admin.id,
-            reason: body.note || "Rejected by admin dispute resolution",
+            reason: note,
             isAdmin: true,
           });
           await db
             .update(disputes)
             .set({
               status: DisputeStatus.resolved_reject,
-              resolutionNote: body.note,
+              resolutionNote: note,
               resolvedByUserId: admin.id,
               resolvedAt: new Date(),
             })
             .where(eq(disputes.id, dispute.id));
         }
+
+        const recipientIds = [...new Set([join.earnerId, task.publisherId])];
+        for (const userId of recipientIds) {
+          await notifyUser({
+            userId,
+            type: "dispute_resolved",
+            title: "Dispute resolved",
+            body:
+              body.decision === "approve"
+                ? `Dispute on "${task.title}" was resolved in favor of the earner.`
+                : `Dispute on "${task.title}" was resolved; submission remains rejected.`,
+            payload: {
+              disputeId: dispute.id,
+              joinId: join.id,
+              taskId: task.id,
+              decision: body.decision,
+            },
+          });
+        }
+
         return { ok: true };
       },
       {
@@ -536,14 +770,22 @@ export function adminModule(config: AppConfig) {
     .get("/config", async ({ request }) => {
       const { user } = await authFromRequest(request, config.SESSION_SECRET);
       requireAdmin(user);
-      return getPlatformSettings();
+      const settings = await getPlatformSettings();
+      return {
+        ...settings,
+        chainAdapter: getChainAdapter().name,
+      };
     })
     .patch(
       "/config",
       async ({ request, body }) => {
         const { user } = await authFromRequest(request, config.SESSION_SECRET);
         requireAdmin(user);
-        return updatePlatformSettings(body);
+        const settings = await updatePlatformSettings(body);
+        return {
+          ...settings,
+          chainAdapter: getChainAdapter().name,
+        };
       },
       {
         body: t.Object({

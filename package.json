@@ -14,7 +14,8 @@
     "db:verify": "bun run --filter @xs-share/db db:verify",
     "db:studio": "turbo run db:studio --filter=@xs-share/db",
     "test": "bun test apps/api",
-    "test:e2e": "bunx playwright test --config apps/web/playwright.config.ts"
+    "test:e2e": "bunx playwright test --config apps/web/playwright.config.ts",
+    "seed:admin": "bun --env-file=.env run apps/api/scripts/seed-admin.ts"
   },
   "devDependencies": {
     "turbo": "^2.10.7",

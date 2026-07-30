@@ -78,6 +78,12 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `X_CLIENT_ID` / `X_CLIENT_SECRET` | X OAuth (optional) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token (optional) |
 | `NEXT_PUBLIC_TELEGRAM_BOT_NAME` | Telegram widget bot username (optional) |
+| `CHAIN_ADAPTER` | `mock` (default) or `tron` for real TRC20 deposit scanning |
+| `TRON_API_URL` | TronGrid / full-node HTTP base (default `https://api.trongrid.io`) |
+| `TRON_API_KEY` | Optional TronGrid API key |
+| `TRON_USDT_CONTRACT` | USDT TRC20 contract (default mainnet USDT) |
+| `TRON_DEPOSIT_XPUB` | Watch-only extended public key exported at `m/44'/195'/0'/0` (required when `CHAIN_ADAPTER=tron`; no private key / mnemonic on server) |
+| `NEXT_PUBLIC_TRON_USDT_CONTRACT` | USDT TRC20 contract for Connect Wallet transfers in web (defaults to mainnet USDT) |
 | `DISABLE_WORKERS` | Disable background workers when `true` |
 
 OAuth is optional for local development when `AUTH_DEV_LOGIN=true`.
@@ -113,7 +119,13 @@ bun run db:studio
 - **Dev Login** (`AUTH_DEV_LOGIN=true`): quick sign-in for development and internal testing.
 - **OAuth**: configure Google, X, and/or Telegram; login buttons appear on the sign-in page when credentials are set.
 
-To access the admin panel, set a user's `role` to `admin` in the database.
+To access the admin panel, set a user's `role` to `admin` in the database, or run:
+
+```bash
+bun run seed:admin
+```
+
+Then sign in via **Dev Login** with external id `dev-admin` (display name `Admin`) and open `/admin`.
 
 ## Docker
 
@@ -164,13 +176,16 @@ End-to-end path covered by the current implementation:
 
 ```
 Sign in (Dev Login / OAuth)
-  -> Top up (TRC20 unique address; mock adapter or admin simulate in local)
+  -> Top up (TRC20 unique address; mock adapter or admin simulate in local;
+       set CHAIN_ADAPTER=tron + TRON_DEPOSIT_XPUB for real scan-to-credit)
   -> Post task (balance frozen)
   -> Second account applies and submits proof
   -> Review and settle
-  -> Withdraw (admin marks complete)
+  -> Withdraw (admin approves, pays from hot wallet manually, marks paid with txHash)
   -> Referral commission in the same transaction
 ```
+
+**Withdrawals:** MVP does not auto-broadcast. After approve, ops send `netPayoutMicros` from the platform hot wallet, then mark paid with the on-chain tx hash.
 
 **Frontend data flow:** Server Components for reads, client islands for mutations, `router.refresh()` for updates. No global state library.
 
