@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import {
   Chain,
-  DEFAULT_TRON_USDT_CONTRACT,
+  isValidErc20Address,
   isValidTrc20Address,
+  parseChain,
 } from "@xs-share/shared";
+import { EvmChainAdapter } from "./evm";
 import { TronChainAdapter } from "./tron";
 import type { ChainAdapter, IncomingUsdtTransfer } from "./types";
 
@@ -15,6 +17,11 @@ export {
   tronAddressFromPublicKey,
   TRON_DEPOSIT_XPUB_PATH,
 } from "./tron";
+export {
+  EvmChainAdapter,
+  deriveEthAddressFromXpub,
+  ETH_DEPOSIT_XPUB_PATH,
+} from "./evm";
 
 const mockIncomingByAddress = new Map<string, IncomingUsdtTransfer[]>();
 const mockConfirmations = new Map<string, number>();
@@ -22,25 +29,44 @@ const mockConfirmations = new Map<string, number>();
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-function mockAddressFor(userId: string, derivationIndex: number): string {
+function mockTrc20Address(userId: string, derivationIndex: number): string {
   const digest = createHash("sha256")
     .update(`${userId}:${derivationIndex}:trc20`)
     .digest();
   let address = "T";
   for (let index = 0; index < 33; index += 1) {
-    address += BASE58_ALPHABET[digest[index % digest.length]! % BASE58_ALPHABET.length];
+    address +=
+      BASE58_ALPHABET[digest[index % digest.length]! % BASE58_ALPHABET.length];
   }
   return address;
 }
 
+function mockErc20Address(userId: string, derivationIndex: number): string {
+  const digest = createHash("sha256")
+    .update(`${userId}:${derivationIndex}:erc20`)
+    .digest("hex");
+  return `0x${digest.slice(0, 40)}`;
+}
+
 export class MockChainAdapter implements ChainAdapter {
   readonly name = "mock";
+  readonly chain: Chain;
+
+  constructor(chain: Chain = Chain.TRC20) {
+    this.chain = chain;
+  }
 
   async allocateAddress(userId: string, derivationIndex: number) {
-    return mockAddressFor(userId, derivationIndex);
+    if (this.chain === Chain.ERC20) {
+      return mockErc20Address(userId, derivationIndex);
+    }
+    return mockTrc20Address(userId, derivationIndex);
   }
 
   isValidAddress(address: string) {
+    if (this.chain === Chain.ERC20) {
+      return isValidErc20Address(address);
+    }
     return isValidTrc20Address(address);
   }
 
@@ -83,27 +109,69 @@ export class MockChainAdapter implements ChainAdapter {
   }
 }
 
-let cached: ChainAdapter | null = null;
+const cached = new Map<Chain, ChainAdapter>();
 
-export function getChainAdapter(): ChainAdapter {
-  if (cached) return cached;
-  const mode = (process.env.CHAIN_ADAPTER ?? "mock").toLowerCase();
-  if (mode === "tron") {
-    cached = new TronChainAdapter();
-  } else {
-    cached = new MockChainAdapter();
+function adapterMode(env: NodeJS.ProcessEnv = process.env): "mock" | "live" {
+  const mode = (env.CHAIN_ADAPTER ?? "mock").toLowerCase();
+  return mode === "mock" ? "mock" : "live";
+}
+
+function createLiveAdapter(chain: Chain): ChainAdapter {
+  if (chain === Chain.ERC20) {
+    return new EvmChainAdapter();
   }
-  return cached;
+  return new TronChainAdapter();
+}
+
+export function getChainAdapter(chain: Chain | string = DEFAULT_CHAIN): ChainAdapter {
+  const resolved = parseChain(typeof chain === "string" ? chain : chain);
+  const existing = cached.get(resolved);
+  if (existing) return existing;
+
+  const adapter =
+    adapterMode() === "mock"
+      ? new MockChainAdapter(resolved)
+      : createLiveAdapter(resolved);
+  cached.set(resolved, adapter);
+  return adapter;
+}
+
+export function listEnabledChains(env: NodeJS.ProcessEnv = process.env): Chain[] {
+  if (adapterMode(env) === "mock") {
+    return [Chain.TRC20, Chain.ERC20];
+  }
+  const enabled: Chain[] = [];
+  if (env.TRON_DEPOSIT_XPUB?.trim()) {
+    enabled.push(Chain.TRC20);
+  }
+  if (env.ETH_DEPOSIT_XPUB?.trim() && env.ETH_RPC_URL?.trim()) {
+    enabled.push(Chain.ERC20);
+  }
+  if (enabled.length === 0) {
+    // Live mode without xpubs still exposes TRC20 for address validation paths
+    // that construct adapters lazily; deposit allocation will fail with clear errors.
+    enabled.push(Chain.TRC20);
+  }
+  return enabled;
+}
+
+export function isChainEnabled(
+  chain: Chain,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return listEnabledChains(env).includes(chain);
 }
 
 export function resetChainAdapterForTests() {
-  cached = null;
+  cached.clear();
   mockIncomingByAddress.clear();
   mockConfirmations.clear();
 }
 
-export function getMockChainAdapter(): MockChainAdapter {
-  const adapter = getChainAdapter();
+export function getMockChainAdapter(
+  chain: Chain = Chain.TRC20,
+): MockChainAdapter {
+  const adapter = getChainAdapter(chain);
   if (!(adapter instanceof MockChainAdapter)) {
     throw new Error("Expected MockChainAdapter");
   }

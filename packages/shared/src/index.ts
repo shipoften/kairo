@@ -11,6 +11,69 @@ export const Locales = {
 } as const;
 export type Locale = (typeof Locales)[keyof typeof Locales];
 
+export const LOCALE_VALUES = Object.values(Locales) as Locale[];
+
+export type LocalizedStringMap = Partial<Record<Locale, string>>;
+
+export function isLocale(value: string): value is Locale {
+  return LOCALE_VALUES.includes(value as Locale);
+}
+
+export function availableLocalesFromMap(
+  map: LocalizedStringMap | null | undefined,
+): Locale[] {
+  if (!map) return [];
+  return LOCALE_VALUES.filter((locale) => Boolean(map[locale]?.trim()));
+}
+
+export function resolveLocalizedString(
+  map: LocalizedStringMap | null | undefined,
+  preferred: string,
+  fallbackLocale: string,
+  legacy = "",
+): string {
+  if (map) {
+    if (isLocale(preferred)) {
+      const preferredValue = map[preferred]?.trim();
+      if (preferredValue) return preferredValue;
+    }
+    if (isLocale(fallbackLocale)) {
+      const fallbackValue = map[fallbackLocale]?.trim();
+      if (fallbackValue) return fallbackValue;
+    }
+    for (const locale of LOCALE_VALUES) {
+      const value = map[locale]?.trim();
+      if (value) return value;
+    }
+  }
+  return legacy.trim();
+}
+
+export function normalizeLocalizedMap(input: unknown): LocalizedStringMap {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  const result: LocalizedStringMap = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!isLocale(key)) continue;
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    result[key] = trimmed;
+  }
+  return result;
+}
+
+export function buildLocalizedMapFromPrimary(
+  primary: string,
+  sourceLocale: string,
+): LocalizedStringMap {
+  const locale = isLocale(sourceLocale) ? sourceLocale : Locales.en;
+  const trimmed = primary.trim();
+  if (!trimmed) return {};
+  return { [locale]: trimmed };
+}
+
 export const WorkMode = {
   publish: "publish",
   earn: "earn",
@@ -145,8 +208,27 @@ export type Currency = (typeof Currency)[keyof typeof Currency];
 
 export const Chain = {
   TRC20: "trc20",
+  ERC20: "erc20",
 } as const;
 export type Chain = (typeof Chain)[keyof typeof Chain];
+
+export const ALL_CHAINS: Chain[] = [Chain.TRC20, Chain.ERC20];
+
+export function isChain(value: string): value is Chain {
+  return value === Chain.TRC20 || value === Chain.ERC20;
+}
+
+/** Defaults to TRC20 for backward-compatible clients. */
+export function parseChain(value: string | undefined | null): Chain {
+  if (value === Chain.ERC20) return Chain.ERC20;
+  return Chain.TRC20;
+}
+
+export type ChainEnv = "mainnet" | "testnet";
+
+export function parseChainEnv(value: string | undefined | null): ChainEnv {
+  return value === "testnet" ? "testnet" : "mainnet";
+}
 
 export const USDT_DECIMALS = 6;
 export const USDT_MICROS_PER_UNIT = 1_000_000;
@@ -167,6 +249,7 @@ export const MIN_DEPOSIT_MICROS = 10_000_000;
 export const MIN_WITHDRAW_MICROS = 20_000_000;
 export const WITHDRAW_NETWORK_FEE_MICROS = 1_000_000;
 export const TRC20_CONFIRMATIONS = 20;
+export const ERC20_CONFIRMATIONS = 12;
 
 export const LedgerType = {
   deposit: "deposit",
@@ -235,6 +318,8 @@ export const ErrorCode = {
   PROOF_INVALID: "PROOF_INVALID",
   UPLOAD_INVALID: "UPLOAD_INVALID",
   DUPLICATE_PROOF: "DUPLICATE_PROOF",
+  TEXT_MODEL_NOT_CONFIGURED: "TEXT_MODEL_NOT_CONFIGURED",
+  TEXT_MODEL_FAILED: "TEXT_MODEL_FAILED",
   INTERNAL: "INTERNAL",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -252,13 +337,31 @@ export const SESSION_COOKIE_NAME = "xs_session";
 
 export const TRONSCAN_TX_URL = "https://tronscan.org/#/transaction";
 export const TRONSCAN_ADDRESS_URL = "https://tronscan.org/#/address";
+export const TRONSCAN_NILE_TX_URL = "https://nile.tronscan.org/#/transaction";
+export const TRONSCAN_NILE_ADDRESS_URL = "https://nile.tronscan.org/#/address";
+
+export const ETHERSCAN_TX_URL = "https://etherscan.io/tx";
+export const ETHERSCAN_ADDRESS_URL = "https://etherscan.io/address";
+export const ETHERSCAN_SEPOLIA_TX_URL = "https://sepolia.etherscan.io/tx";
+export const ETHERSCAN_SEPOLIA_ADDRESS_URL =
+  "https://sepolia.etherscan.io/address";
 
 /** Mainnet USDT TRC20 contract (Tron). */
 export const DEFAULT_TRON_USDT_CONTRACT =
   "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
+/** Mainnet USDT ERC20 contract (Ethereum). */
+export const DEFAULT_ETH_USDT_CONTRACT =
+  "0xdac17f958d2ee523a2206206994597c13d831ec7";
+
 /** Tron mainnet chain id hex used by TronLink. */
 export const TRON_MAINNET_CHAIN_ID = "0x2b6653dc";
+
+/** Tron Nile testnet chain id hex. */
+export const TRON_NILE_CHAIN_ID = "0xcd8690dc";
+
+export const ETH_MAINNET_CHAIN_ID = 1;
+export const ETH_SEPOLIA_CHAIN_ID = 11155111;
 
 /** Convert display USDT to micro-USDT (6 decimals). */
 export function usdtToMicros(amountUsdt: number): number {
@@ -266,7 +369,7 @@ export function usdtToMicros(amountUsdt: number): number {
   return Math.round(amountUsdt * 1_000_000);
 }
 
-/** TRC20 transfer amount param: 6-decimal USDT to uint256 token units. */
+/** TRC20/ERC20 transfer amount param: 6-decimal USDT to uint256 token units. */
 export function usdtMicrosToTokenAmount(micros: number): string {
   if (!Number.isInteger(micros) || micros <= 0) {
     throw new Error("Invalid USDT micro amount");
@@ -278,3 +381,61 @@ export function usdtMicrosToTokenAmount(micros: number): string {
 export function isValidTrc20Address(address: string): boolean {
   return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address.trim());
 }
+
+/** Loose ERC20 hex address check (not full checksum). */
+export function isValidErc20Address(address: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(address.trim());
+}
+
+export function isValidChainAddress(chain: Chain, address: string): boolean {
+  if (chain === Chain.ERC20) return isValidErc20Address(address);
+  return isValidTrc20Address(address);
+}
+
+export function getDefaultConfirmations(chain: Chain): number {
+  return chain === Chain.ERC20 ? ERC20_CONFIRMATIONS : TRC20_CONFIRMATIONS;
+}
+
+export function getExplorerTxUrl(
+  chain: Chain,
+  txHash: string,
+  chainEnv: ChainEnv = "mainnet",
+): string {
+  if (chain === Chain.ERC20) {
+    const base =
+      chainEnv === "testnet" ? ETHERSCAN_SEPOLIA_TX_URL : ETHERSCAN_TX_URL;
+    return `${base}/${txHash}`;
+  }
+  const base =
+    chainEnv === "testnet" ? TRONSCAN_NILE_TX_URL : TRONSCAN_TX_URL;
+  return `${base}/${txHash}`;
+}
+
+export function getExplorerAddressUrl(
+  chain: Chain,
+  address: string,
+  chainEnv: ChainEnv = "mainnet",
+): string {
+  if (chain === Chain.ERC20) {
+    const base =
+      chainEnv === "testnet"
+        ? ETHERSCAN_SEPOLIA_ADDRESS_URL
+        : ETHERSCAN_ADDRESS_URL;
+    return `${base}/${address}`;
+  }
+  const base =
+    chainEnv === "testnet"
+      ? TRONSCAN_NILE_ADDRESS_URL
+      : TRONSCAN_ADDRESS_URL;
+  return `${base}/${address}`;
+}
+
+export type SupportedChainInfo = {
+  chain: Chain;
+  minDepositMicros: number;
+  minWithdrawMicros: number;
+  networkFeeMicros: number;
+  confirmations: number;
+  explorerTxBase: string;
+  explorerAddressBase: string;
+};

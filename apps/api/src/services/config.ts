@@ -4,6 +4,7 @@ import {
   DEFAULT_PLATFORM_FEE_RATE_BPS,
   DEFAULT_REFERRAL_EARN_RATE_BPS,
   DEFAULT_REFERRAL_PUBLISH_RATE_BPS,
+  ERC20_CONFIRMATIONS,
   MIN_DEPOSIT_MICROS,
   MIN_WITHDRAW_MICROS,
   TRC20_CONFIRMATIONS,
@@ -20,6 +21,10 @@ const KEYS = {
   minWithdrawMicros: "min_withdraw_micros",
   withdrawNetworkFeeMicros: "withdraw_network_fee_micros",
   trc20Confirmations: "trc20_confirmations",
+  erc20Confirmations: "erc20_confirmations",
+  textModelBaseUrl: "text_model_base_url",
+  textModelApiKey: "text_model_api_key",
+  textModelName: "text_model_name",
 } as const;
 
 async function getValue(key: string, fallback: string) {
@@ -28,6 +33,26 @@ async function getValue(key: string, fallback: string) {
     where: eq(platformConfigs.key, key),
   });
   return row?.value ?? fallback;
+}
+
+function maskSecret(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 4) return "****";
+  return `${"*".repeat(Math.min(trimmed.length - 4, 12))}${trimmed.slice(-4)}`;
+}
+
+export async function getTextModelSettings() {
+  const [baseUrl, apiKey, model] = await Promise.all([
+    getValue(KEYS.textModelBaseUrl, ""),
+    getValue(KEYS.textModelApiKey, ""),
+    getValue(KEYS.textModelName, ""),
+  ]);
+  return {
+    baseUrl: baseUrl.trim(),
+    apiKey: apiKey.trim(),
+    model: model.trim(),
+  };
 }
 
 export async function getPlatformSettings() {
@@ -40,6 +65,8 @@ export async function getPlatformSettings() {
     minWithdrawMicros,
     withdrawNetworkFeeMicros,
     trc20Confirmations,
+    erc20Confirmations,
+    textModel,
   ] = await Promise.all([
     getValue(KEYS.platformFeeRateBps, String(DEFAULT_PLATFORM_FEE_RATE_BPS)),
     getValue(KEYS.referralEnabled, "true"),
@@ -55,6 +82,8 @@ export async function getPlatformSettings() {
       String(WITHDRAW_NETWORK_FEE_MICROS),
     ),
     getValue(KEYS.trc20Confirmations, String(TRC20_CONFIRMATIONS)),
+    getValue(KEYS.erc20Confirmations, String(ERC20_CONFIRMATIONS)),
+    getTextModelSettings(),
   ]);
 
   return {
@@ -66,6 +95,13 @@ export async function getPlatformSettings() {
     minWithdrawMicros: Number(minWithdrawMicros),
     withdrawNetworkFeeMicros: Number(withdrawNetworkFeeMicros),
     trc20Confirmations: Number(trc20Confirmations),
+    erc20Confirmations: Number(erc20Confirmations),
+    textModelBaseUrl: textModel.baseUrl,
+    textModelApiKeyConfigured: Boolean(textModel.apiKey),
+    textModelApiKeyMasked: textModel.apiKey
+      ? maskSecret(textModel.apiKey)
+      : "",
+    textModelName: textModel.model,
   };
 }
 
@@ -93,6 +129,10 @@ export async function updatePlatformSettings(input: {
   minWithdrawMicros?: number;
   withdrawNetworkFeeMicros?: number;
   trc20Confirmations?: number;
+  erc20Confirmations?: number;
+  textModelBaseUrl?: string;
+  textModelApiKey?: string;
+  textModelName?: string;
 }) {
   if (input.platformFeeRateBps !== undefined) {
     await setPlatformSetting(
@@ -141,6 +181,27 @@ export async function updatePlatformSettings(input: {
       KEYS.trc20Confirmations,
       String(input.trc20Confirmations),
     );
+  }
+  if (input.erc20Confirmations !== undefined) {
+    await setPlatformSetting(
+      KEYS.erc20Confirmations,
+      String(input.erc20Confirmations),
+    );
+  }
+  if (input.textModelBaseUrl !== undefined) {
+    await setPlatformSetting(
+      KEYS.textModelBaseUrl,
+      input.textModelBaseUrl.trim(),
+    );
+  }
+  if (input.textModelApiKey !== undefined) {
+    const nextKey = input.textModelApiKey.trim();
+    if (nextKey) {
+      await setPlatformSetting(KEYS.textModelApiKey, nextKey);
+    }
+  }
+  if (input.textModelName !== undefined) {
+    await setPlatformSetting(KEYS.textModelName, input.textModelName.trim());
   }
   return getPlatformSettings();
 }

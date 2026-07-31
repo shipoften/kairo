@@ -1,3 +1,5 @@
+import type { Chain } from "@xs-share/shared";
+
 export type IncomingUsdtTransfer = {
   txHash: string;
   fromAddress: string;
@@ -9,6 +11,7 @@ export type IncomingUsdtTransfer = {
 
 export type ChainAdapter = {
   readonly name: string;
+  readonly chain: Chain;
   allocateAddress(userId: string, derivationIndex: number): Promise<string>;
   isValidAddress(address: string): boolean;
   getConfirmations(txHash: string): Promise<number>;

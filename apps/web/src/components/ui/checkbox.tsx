@@ -7,7 +7,7 @@ import { Icon } from "./icon";
 
 export type CheckboxProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
-  "type" | "children"
+  "type" | "children" | "size"
 >;
 
 export function Checkbox({
@@ -37,6 +37,7 @@ export function Checkbox({
           "group-has-[:focus-visible]/checkbox:border-accent group-has-[:focus-visible]/checkbox:ring-2 group-has-[:focus-visible]/checkbox:ring-accent/30 group-has-[:focus-visible]/checkbox:ring-offset-2 group-has-[:focus-visible]/checkbox:ring-offset-background",
           "group-has-[:checked]/checkbox:border-accent group-has-[:checked]/checkbox:bg-accent",
           "group-has-[:disabled]/checkbox:opacity-50",
+          "group-has-[[aria-invalid=true]]/checkbox:border-red-500",
         )}
       >
         <Icon

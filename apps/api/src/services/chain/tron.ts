@@ -3,7 +3,7 @@ import { base58check } from "@scure/base";
 import { Point } from "@noble/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { DEFAULT_TRON_USDT_CONTRACT, isValidTrc20Address } from "@xs-share/shared";
+import { DEFAULT_TRON_USDT_CONTRACT, Chain, isValidTrc20Address } from "@xs-share/shared";
 import type { ChainAdapter, IncomingUsdtTransfer } from "./types";
 
 /** External receive chain xpub: export at m/44'/195'/0'/0, then derive /{index}. */
@@ -105,6 +105,7 @@ type TronGridTrc20Item = {
 
 export class TronChainAdapter implements ChainAdapter {
   readonly name = "tron";
+  readonly chain = Chain.TRC20;
   private readonly options: TronAdapterOptions;
 
   constructor(options?: TronAdapterOptions) {

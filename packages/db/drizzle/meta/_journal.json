@@ -15,6 +15,20 @@
       "when": 1785400000000,
       "tag": "0001_p0_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785500000000,
+      "tag": "0002_task_i18n",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0003_multi_chain_wallet",
+      "breakpoints": true
     }
   ]
 }

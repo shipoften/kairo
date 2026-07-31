@@ -106,6 +106,12 @@ export const tasks = pgTable(
       .references(() => users.id),
     title: varchar("title", { length: 200 }).notNull(),
     description: text("description").notNull().default(""),
+    titleI18n: jsonb("title_i18n").$type<Record<string, string>>().notNull().default({}),
+    descriptionI18n: jsonb("description_i18n")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default({}),
+    sourceLocale: varchar("source_locale", { length: 8 }).notNull().default("en"),
     type: varchar("type", { length: 32 }).notNull(),
     targetUrl: text("target_url"),
     unitPriceMicros: bigint("unit_price_micros", { mode: "number" }).notNull(),
@@ -113,7 +119,6 @@ export const tasks = pgTable(
     totalQuota: integer("total_quota").notNull(),
     remainingQuota: integer("remaining_quota").notNull(),
     status: varchar("status", { length: 32 }).notNull().default("draft"),
-    languageTag: varchar("language_tag", { length: 8 }).notNull().default("en"),
     submitDeadlineHours: integer("submit_deadline_hours").notNull().default(72),
     reviewDeadlineHours: integer("review_deadline_hours").notNull().default(72),
     allowResubmit: boolean("allow_resubmit").notNull().default(true),
@@ -244,8 +249,7 @@ export const depositAddresses = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     userId: uuid("user_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" })
-      .unique(),
+      .references(() => users.id, { onDelete: "cascade" }),
     chain: varchar("chain", { length: 16 }).notNull().default("trc20"),
     address: varchar("address", { length: 64 }).notNull(),
     derivationIndex: integer("derivation_index").notNull().default(0),
@@ -256,6 +260,10 @@ export const depositAddresses = pgTable(
       .notNull(),
   },
   (table) => [
+    uniqueIndex("deposit_addresses_user_chain_uidx").on(
+      table.userId,
+      table.chain,
+    ),
     uniqueIndex("deposit_addresses_address_uidx").on(table.address),
     index("deposit_addresses_user_idx").on(table.userId),
     index("deposit_addresses_last_scanned_idx").on(table.lastScannedAt),
@@ -285,7 +293,7 @@ export const deposits = pgTable(
   },
   (table) => [
     index("deposits_user_idx").on(table.userId),
-    uniqueIndex("deposits_tx_hash_uidx").on(table.txHash),
+    uniqueIndex("deposits_chain_tx_hash_uidx").on(table.chain, table.txHash),
   ],
 );
 

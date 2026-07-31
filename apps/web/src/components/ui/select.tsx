@@ -11,7 +11,14 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
+import {
+  controlTriggerClassName,
+  menuItemClassName,
+  menuSurfaceClassName,
+  type ControlSize,
+} from "./control";
 import { Icon } from "./icon";
+import { syncPopoverPosition } from "./popover-position";
 
 export type SelectOption = {
   value: string;
@@ -24,43 +31,14 @@ export type SelectProps = {
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
-  placeholder: string;
+  placeholder?: string;
   disabled?: boolean;
   id?: string;
   className?: string;
+  size?: ControlSize;
+  invalid?: boolean;
   "aria-label"?: string;
 };
-
-function syncDropdownPosition(
-  anchorElement: HTMLElement,
-  listElement: HTMLUListElement,
-) {
-  const rect = anchorElement.getBoundingClientRect();
-  const viewportPadding = 8;
-  const gap = 4;
-  const maxListHeight = 240;
-
-  const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
-  const spaceAbove = rect.top - viewportPadding;
-  const openUpward = spaceBelow < maxListHeight && spaceAbove > spaceBelow;
-  const availableSpace = (openUpward ? spaceAbove : spaceBelow) - gap;
-  const maxHeight = Math.min(maxListHeight, Math.max(availableSpace, 0));
-
-  listElement.style.maxHeight = `${maxHeight}px`;
-  listElement.style.width = `${rect.width}px`;
-  listElement.style.left = `${Math.min(
-    rect.left,
-    window.innerWidth - rect.width - viewportPadding,
-  )}px`;
-
-  const listHeight = listElement.offsetHeight;
-
-  if (openUpward) {
-    listElement.style.top = `${rect.top - listHeight - gap}px`;
-  } else {
-    listElement.style.top = `${rect.bottom + gap}px`;
-  }
-}
 
 function SelectOptionsPortal({
   open,
@@ -85,7 +63,7 @@ function SelectOptionsPortal({
 
   const updatePosition = useCallback(() => {
     if (!anchorElement || !listRef.current) return;
-    syncDropdownPosition(anchorElement, listRef.current);
+    syncPopoverPosition(anchorElement, listRef.current, { matchWidth: true });
   }, [anchorElement]);
 
   useLayoutEffect(() => {
@@ -118,7 +96,7 @@ function SelectOptionsPortal({
       ref={listRef}
       id={listId}
       role="listbox"
-      className="fixed z-[60] max-h-60 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-lg"
+      className={cn(menuSurfaceClassName, "max-h-60 overflow-y-auto")}
       data-ui-select-listbox=""
     >
       {options.map((option, index) => {
@@ -132,7 +110,8 @@ function SelectOptionsPortal({
             aria-selected={selected}
             aria-disabled={option.disabled || undefined}
             className={cn(
-              "flex cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm transition",
+              menuItemClassName,
+              "justify-between",
               option.disabled
                 ? "cursor-not-allowed opacity-50"
                 : highlighted
@@ -170,19 +149,23 @@ export function Select({
   disabled = false,
   id,
   className,
+  size = "md",
+  invalid = false,
   "aria-label": ariaLabel,
 }: SelectProps) {
   const generatedId = useId();
   const triggerId = id ?? generatedId;
   const listId = `${triggerId}-listbox`;
-  const [anchorElement, setAnchorElement] = useState<HTMLButtonElement | null>(null);
+  const [anchorElement, setAnchorElement] = useState<HTMLButtonElement | null>(
+    null,
+  );
   const [open, setOpen] = useState(false);
   const [internalValue, setInternalValue] = useState(defaultValue);
   const [activeIndex, setActiveIndex] = useState(-1);
 
   const value = controlledValue !== undefined ? controlledValue : internalValue;
   const selectedOption = options.find((option) => option.value === value);
-  const displayLabel = selectedOption?.label ?? placeholder;
+  const displayLabel = selectedOption?.label ?? placeholder ?? "";
 
   const selectableIndexes = options
     .map((option, index) => (option.disabled ? -1 : index))
@@ -216,7 +199,8 @@ export function Select({
   function moveHighlight(direction: 1 | -1) {
     if (selectableIndexes.length === 0) return;
     const currentPosition = selectableIndexes.indexOf(activeIndex);
-    const startPosition = currentPosition >= 0 ? currentPosition : direction === 1 ? -1 : 0;
+    const startPosition =
+      currentPosition >= 0 ? currentPosition : direction === 1 ? -1 : 0;
     const nextPosition =
       (startPosition + direction + selectableIndexes.length) %
       selectableIndexes.length;
@@ -260,12 +244,16 @@ export function Select({
         aria-haspopup="listbox"
         aria-controls={listId}
         aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
         disabled={disabled}
-        className={cn(
-          "flex w-full items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-left text-sm outline-none transition focus:border-accent disabled:cursor-not-allowed disabled:opacity-50",
-          !selectedOption && placeholder ? "text-muted" : "",
-          className,
-        )}
+        className={controlTriggerClassName({
+          size,
+          invalid,
+          className: cn(
+            !selectedOption && placeholder ? "text-muted" : "",
+            className,
+          ),
+        })}
         onClick={() => {
           if (open) {
             closeList();
@@ -311,7 +299,7 @@ export function Select({
         <Icon
           icon={ArrowDown01Icon}
           size={16}
-          className={cn("text-muted transition", open ? "rotate-180" : "")}
+          className={cn("shrink-0 text-muted transition", open ? "rotate-180" : "")}
         />
       </button>
 

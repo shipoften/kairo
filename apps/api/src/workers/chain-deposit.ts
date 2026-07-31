@@ -1,6 +1,11 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { depositAddresses, deposits } from "@xs-share/db";
-import { DepositStatus, formatUsdt } from "@xs-share/shared";
+import {
+  Chain,
+  DepositStatus,
+  formatUsdt,
+  parseChain,
+} from "@xs-share/shared";
 import { getDb } from "../lib/db";
 import { getChainAdapter } from "../services/chain";
 import { getPlatformSettings } from "../services/config";
@@ -78,14 +83,28 @@ export async function selectDepositAddressesForScan(limit = SCAN_BATCH_SIZE) {
     .limit(limit);
 }
 
+async function requiredConfirmationsFor(
+  chain: string,
+  settings: Awaited<ReturnType<typeof getPlatformSettings>>,
+) {
+  return parseChain(chain) === Chain.ERC20
+    ? settings.erc20Confirmations
+    : settings.trc20Confirmations;
+}
+
 async function scanDepositAddresses() {
   const db = getDb();
-  const adapter = getChainAdapter();
   const settings = await getPlatformSettings();
   const addresses = await selectDepositAddressesForScan(SCAN_BATCH_SIZE);
   const now = new Date();
 
   for (const row of addresses) {
+    const chain = parseChain(row.chain);
+    const adapter = getChainAdapter(chain);
+    const requiredConfirmations = await requiredConfirmationsFor(
+      chain,
+      settings,
+    );
     const incoming = await adapter.listIncomingUsdt(row.address);
     let creditedAny = false;
     for (const transfer of incoming) {
@@ -96,8 +115,8 @@ async function scanDepositAddresses() {
         fromAddress: transfer.fromAddress,
         amountMicros: transfer.amountMicros,
         confirmations: transfer.confirmations,
-        requiredConfirmations: settings.trc20Confirmations,
-        chain: row.chain,
+        requiredConfirmations,
+        chain,
       });
       if (result.credited) {
         creditedAny = true;
@@ -114,7 +133,8 @@ async function scanDepositAddresses() {
       .update(depositAddresses)
       .set({
         lastScannedAt: now,
-        lastActivityAt: creditedAny || incoming.length > 0 ? now : row.lastActivityAt,
+        lastActivityAt:
+          creditedAny || incoming.length > 0 ? now : row.lastActivityAt,
       })
       .where(eq(depositAddresses.id, row.id));
   }
@@ -122,7 +142,6 @@ async function scanDepositAddresses() {
 
 async function advancePendingDeposits() {
   const db = getDb();
-  const adapter = getChainAdapter();
   const settings = await getPlatformSettings();
   const pending = await db.query.deposits.findMany({
     where: inArray(deposits.status, [
@@ -133,10 +152,16 @@ async function advancePendingDeposits() {
   });
 
   for (const row of pending) {
+    const chain = parseChain(row.chain);
+    const adapter = getChainAdapter(chain);
+    const requiredConfirmations = await requiredConfirmationsFor(
+      chain,
+      settings,
+    );
     const confirmations = await adapter.getConfirmations(row.txHash);
     if (
       confirmations === row.confirmations &&
-      confirmations < settings.trc20Confirmations
+      confirmations < requiredConfirmations
     ) {
       continue;
     }
@@ -144,6 +169,7 @@ async function advancePendingDeposits() {
       where: and(
         eq(depositAddresses.userId, row.userId),
         eq(depositAddresses.address, row.address),
+        eq(depositAddresses.chain, chain),
       ),
     });
     if (!addressRow) continue;
@@ -155,8 +181,8 @@ async function advancePendingDeposits() {
       fromAddress: row.fromAddress ?? undefined,
       amountMicros: row.amountMicros,
       confirmations,
-      requiredConfirmations: settings.trc20Confirmations,
-      chain: row.chain,
+      requiredConfirmations,
+      chain,
     });
     if (result.credited) {
       await notifyUser({

@@ -8,10 +8,89 @@ import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { checkRateLimit } from "../lib/rate-limit";
 import { authFromRequest } from "../lib/request-auth";
-import { assertObjectExists, createPresignedUpload } from "../services/upload/s3";
+import {
+  createUploadAccessUrl,
+  verifyUploadAccessToken,
+} from "../lib/upload-access";
+import {
+  assertObjectExists,
+  createPresignedUpload,
+  readObjectBytes,
+} from "../services/upload/s3";
+
+function uploadResponse(
+  config: AppConfig,
+  row: {
+    id: string;
+    objectKey: string;
+    publicUrl: string;
+    contentType: string;
+    sizeBytes: number;
+  },
+) {
+  return {
+    id: row.id,
+    objectKey: row.objectKey,
+    publicUrl: createUploadAccessUrl(config, row.id),
+    contentType: row.contentType,
+    sizeBytes: row.sizeBytes,
+  };
+}
 
 export function uploadsModule(config: AppConfig) {
   return new Elysia({ prefix: `${API_PREFIX}/uploads` })
+    .get(
+      "/:id/file",
+      async ({ params, query, set }) => {
+        const expiresAt = Number(query.expires);
+        const token = query.token ?? "";
+        if (
+          !verifyUploadAccessToken({
+            uploadId: params.id,
+            expiresAt,
+            token,
+            secret: config.SESSION_SECRET,
+          })
+        ) {
+          throw new AppError(
+            ErrorCode.FORBIDDEN,
+            "Invalid upload access token",
+            403,
+            "errors.forbidden",
+          );
+        }
+
+        const db = getDb();
+        const row = await db.query.uploads.findFirst({
+          where: eq(uploads.id, params.id),
+        });
+        if (!row) {
+          throw new AppError(
+            ErrorCode.NOT_FOUND,
+            "Upload not found",
+            404,
+            "errors.not_found",
+          );
+        }
+
+        const file = await readObjectBytes({
+          config,
+          objectKey: row.objectKey,
+        });
+        set.headers["Content-Type"] = file.contentType;
+        set.headers["Cache-Control"] = "private, max-age=3600";
+        return file.body;
+      },
+      {
+        params: t.Object({
+          id: t.String({ format: "uuid" }),
+        }),
+        query: t.Object({
+          expires: t.String(),
+          token: t.String(),
+        }),
+      },
+    )
     .post(
       "/presign",
       async ({ request, body }) => {
@@ -77,13 +156,7 @@ export function uploadsModule(config: AppConfig) {
               "errors.upload_invalid",
             );
           }
-          return {
-            id: existing.id,
-            objectKey: existing.objectKey,
-            publicUrl: existing.publicUrl,
-            contentType: existing.contentType,
-            sizeBytes: existing.sizeBytes,
-          };
+          return uploadResponse(config, existing);
         }
 
         const [row] = await db
@@ -97,13 +170,7 @@ export function uploadsModule(config: AppConfig) {
           })
           .returning();
 
-        return {
-          id: row.id,
-          objectKey: row.objectKey,
-          publicUrl: row.publicUrl,
-          contentType: row.contentType,
-          sizeBytes: row.sizeBytes,
-        };
+        return uploadResponse(config, row);
       },
       {
         body: t.Object({

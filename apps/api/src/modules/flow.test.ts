@@ -345,7 +345,7 @@ describe.skipIf(!hasDatabase)("api integration", () => {
             "content-type": "application/json",
             cookie: publisher.cookie,
           },
-          body: JSON.stringify({ txHash: `paid_${stamp}` }),
+          body: JSON.stringify({ txHash: `paidhash${stamp}` }),
         },
       ),
     );

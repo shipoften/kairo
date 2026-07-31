@@ -1,21 +1,30 @@
 import { cn } from "@/lib/cn";
+import {
+  controlClassName,
+  type ControlSize,
+} from "./control";
 
 export type InputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
-  "placeholder"
+  "size"
 > & {
-  placeholder: string;
+  size?: ControlSize;
+  invalid?: boolean;
 };
 
-export function Input({ className, placeholder, ...props }: InputProps) {
+export function Input({
+  className,
+  size = "md",
+  invalid = false,
+  placeholder,
+  ...props
+}: InputProps) {
   return (
     <input
-      className={cn(
-        "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none transition placeholder:text-muted focus:border-accent",
-        className,
-      )}
-      {...props}
+      aria-invalid={invalid || undefined}
+      className={cn(controlClassName({ size, invalid, className }))}
       placeholder={placeholder}
+      {...props}
     />
   );
 }

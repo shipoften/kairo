@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import { cn } from "@/lib/cn";
 
 export type ButtonVariant =
@@ -79,19 +80,26 @@ export function buttonClassName({
   );
 }
 
-export function Button({
-  variant = "primary",
-  size = "md",
-  fullWidth = false,
-  loading = false,
-  className,
-  type = "button",
-  disabled,
-  children,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & ButtonStyleProps) {
+export const Button = forwardRef<
+  HTMLButtonElement,
+  React.ButtonHTMLAttributes<HTMLButtonElement> & ButtonStyleProps
+>(function Button(
+  {
+    variant = "primary",
+    size = "md",
+    fullWidth = false,
+    loading = false,
+    className,
+    type = "button",
+    disabled,
+    children,
+    ...props
+  },
+  ref,
+) {
   return (
     <button
+      ref={ref}
       type={type}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
@@ -102,4 +110,4 @@ export function Button({
       {children}
     </button>
   );
-}
+});

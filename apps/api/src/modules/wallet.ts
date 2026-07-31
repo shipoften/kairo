@@ -14,11 +14,16 @@ import {
 } from "@xs-share/db";
 import {
   API_PREFIX,
+  Chain,
   DisputeStatus,
   ErrorCode,
   JoinStatus,
   TaskStatus,
   WithdrawalStatus,
+  parseChain,
+  parseChainEnv,
+  getExplorerAddressUrl,
+  getExplorerTxUrl,
 } from "@xs-share/shared";
 import type { AppConfig } from "../config";
 import { requireAdmin, requireUser } from "../lib/auth";
@@ -41,8 +46,31 @@ import {
   getPlatformSettings,
   updatePlatformSettings,
 } from "../services/config";
-import { getChainAdapter } from "../services/chain";
+import { getChainAdapter, listEnabledChains } from "../services/chain";
 import { notifyUser } from "../services/notify";
+
+function chainEnvFromProcess() {
+  return parseChainEnv(process.env.CHAIN_ENV ?? process.env.NEXT_PUBLIC_CHAIN_ENV);
+}
+
+function supportedChainsPayload(settings: Awaited<ReturnType<typeof getPlatformSettings>>) {
+  const chainEnv = chainEnvFromProcess();
+  return listEnabledChains().map((chain) => ({
+    chain,
+    minDepositMicros: settings.minDepositMicros,
+    minWithdrawMicros: settings.minWithdrawMicros,
+    networkFeeMicros: settings.withdrawNetworkFeeMicros,
+    confirmations:
+      chain === Chain.ERC20
+        ? settings.erc20Confirmations
+        : settings.trc20Confirmations,
+    explorerTxBase: getExplorerTxUrl(chain, "", chainEnv).replace(/\/$/, ""),
+    explorerAddressBase: getExplorerAddressUrl(chain, "", chainEnv).replace(
+      /\/$/,
+      "",
+    ),
+  }));
+}
 
 async function userNameById(userIds: string[]) {
   if (userIds.length === 0) return new Map<string, string>();
@@ -68,24 +96,37 @@ export function walletModule(config: AppConfig) {
         frozenMicros: wallet?.frozenMicros ?? 0,
         currency: "USDT",
         chain: "trc20",
+        supportedChains: supportedChainsPayload(settings),
         minDepositMicros: settings.minDepositMicros,
         minWithdrawMicros: settings.minWithdrawMicros,
         withdrawNetworkFeeMicros: settings.withdrawNetworkFeeMicros,
         trc20Confirmations: settings.trc20Confirmations,
+        erc20Confirmations: settings.erc20Confirmations,
       };
     })
-    .get("/deposit-address", async ({ request }) => {
+    .get("/deposit-address", async ({ request, query }) => {
       const { user } = await authFromRequest(request, config.SESSION_SECRET);
       const current = requireUser(user);
-      const row = await ensureDepositAddress(current.id);
+      const chain = parseChain(query.chain);
+      const row = await ensureDepositAddress(current.id, chain);
       const settings = await getPlatformSettings();
+      const confirmations =
+        chain === Chain.ERC20
+          ? settings.erc20Confirmations
+          : settings.trc20Confirmations;
       return {
         chain: row.chain,
         address: row.address,
         minDepositMicros: settings.minDepositMicros,
         trc20Confirmations: settings.trc20Confirmations,
+        erc20Confirmations: settings.erc20Confirmations,
+        requiredConfirmations: confirmations,
         currency: "USDT",
       };
+    }, {
+      query: t.Object({
+        chain: t.Optional(t.String()),
+      }),
     })
     .get("/transactions", async ({ request }) => {
       const { user } = await authFromRequest(request, config.SESSION_SECRET);
@@ -134,12 +175,14 @@ export function walletModule(config: AppConfig) {
         const result = await registerDepositTx({
           userId: current.id,
           txHash: body.txHash,
+          chain: body.chain,
         });
         return result;
       },
       {
         body: t.Object({
           txHash: t.String({ minLength: 16 }),
+          chain: t.Optional(t.String()),
         }),
       },
     )
@@ -163,6 +206,7 @@ export function walletModule(config: AppConfig) {
           userId: current.id,
           amountMicros: body.amountMicros,
           toAddress: body.toAddress,
+          chain: body.chain,
         });
         return { withdrawal: row };
       },
@@ -170,6 +214,7 @@ export function walletModule(config: AppConfig) {
         body: t.Object({
           amountMicros: t.Number(),
           toAddress: t.String({ minLength: 1 }),
+          chain: t.Optional(t.String()),
         }),
       },
     );
@@ -418,6 +463,7 @@ export function adminModule(config: AppConfig) {
         activeTasks: activeTaskStats[0]?.count ?? 0,
         totalUsers: totalUserStats[0]?.count ?? 0,
         chainAdapter: getChainAdapter().name,
+        enabledChains: listEnabledChains(),
       };
     })
     .get("/users", async ({ request }) => {
@@ -539,6 +585,7 @@ export function adminModule(config: AppConfig) {
           amountMicros: body.amountMicros,
           confirmations: body.confirmations,
           txHash: body.txHash,
+          chain: body.chain,
         });
         return result;
       },
@@ -548,6 +595,7 @@ export function adminModule(config: AppConfig) {
           amountMicros: t.Number(),
           confirmations: t.Optional(t.Number()),
           txHash: t.Optional(t.String()),
+          chain: t.Optional(t.String()),
         }),
       },
     )
@@ -789,6 +837,7 @@ export function adminModule(config: AppConfig) {
       return {
         ...settings,
         chainAdapter: getChainAdapter().name,
+        enabledChains: listEnabledChains(),
       };
     })
     .patch(
@@ -800,6 +849,7 @@ export function adminModule(config: AppConfig) {
         return {
           ...settings,
           chainAdapter: getChainAdapter().name,
+          enabledChains: listEnabledChains(),
         };
       },
       {
@@ -812,6 +862,10 @@ export function adminModule(config: AppConfig) {
           minWithdrawMicros: t.Optional(t.Number()),
           withdrawNetworkFeeMicros: t.Optional(t.Number()),
           trc20Confirmations: t.Optional(t.Number()),
+          erc20Confirmations: t.Optional(t.Number()),
+          textModelBaseUrl: t.Optional(t.String()),
+          textModelApiKey: t.Optional(t.String()),
+          textModelName: t.Optional(t.String()),
         }),
       },
     );

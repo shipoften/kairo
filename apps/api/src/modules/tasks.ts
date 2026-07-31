@@ -7,10 +7,18 @@ import {
   AuthProvider,
   ErrorCode,
   JoinStatus,
+  Locales,
+  availableLocalesFromMap,
+  buildLocalizedMapFromPrimary,
+  isLocale,
   isXTaskType,
+  normalizeLocalizedMap,
   proofSchemaForTaskType,
+  resolveLocalizedString,
   TaskStatus,
   TaskType,
+  type Locale,
+  type LocalizedStringMap,
   type ProofSchema,
 } from "@xs-share/shared";
 import type { AppConfig } from "../config";
@@ -26,16 +34,62 @@ import {
   proofFingerprint,
   validateProofAgainstSchema,
 } from "../services/proof";
+import {
+  assertSupportedLocales,
+  translateTaskCopy,
+} from "../services/text-model";
 import { freezeForTaskPublish, releaseTaskHoldRemaining } from "../services/wallet";
 import { notifyUser } from "../services/notify";
 
 const taskTypeValues = Object.values(TaskType);
 
-function publicTask(task: typeof tasks.$inferSelect, publisherName?: string) {
+function asLocalizedMap(value: unknown): LocalizedStringMap {
+  return normalizeLocalizedMap(value);
+}
+
+function resolveTaskCopy(
+  task: typeof tasks.$inferSelect,
+  preferredLocale?: string,
+) {
+  const titleI18n = asLocalizedMap(task.titleI18n);
+  const descriptionI18n = asLocalizedMap(task.descriptionI18n);
+  const preferred = preferredLocale || task.sourceLocale || Locales.en;
+  return {
+    titleI18n,
+    descriptionI18n,
+    sourceLocale: isLocale(task.sourceLocale)
+      ? task.sourceLocale
+      : Locales.en,
+    availableLocales: availableLocalesFromMap(titleI18n),
+    title: resolveLocalizedString(
+      titleI18n,
+      preferred,
+      task.sourceLocale,
+      task.title,
+    ),
+    description: resolveLocalizedString(
+      descriptionI18n,
+      preferred,
+      task.sourceLocale,
+      task.description,
+    ),
+  };
+}
+
+function publicTask(
+  task: typeof tasks.$inferSelect,
+  publisherName?: string,
+  preferredLocale?: string,
+) {
+  const copy = resolveTaskCopy(task, preferredLocale);
   return {
     id: task.id,
-    title: task.title,
-    description: task.description,
+    title: copy.title,
+    description: copy.description,
+    titleI18n: copy.titleI18n,
+    descriptionI18n: copy.descriptionI18n,
+    sourceLocale: copy.sourceLocale,
+    availableLocales: copy.availableLocales,
     type: task.type,
     targetUrl: task.targetUrl,
     unitPriceMicros: task.unitPriceMicros,
@@ -43,13 +97,57 @@ function publicTask(task: typeof tasks.$inferSelect, publisherName?: string) {
     totalQuota: task.totalQuota,
     remainingQuota: task.remainingQuota,
     status: task.status,
-    languageTag: task.languageTag,
     endsAt: task.endsAt,
     publisherId: task.publisherId,
     publisherName: publisherName ?? null,
     proofSchema: task.proofSchema,
     allowResubmit: task.allowResubmit,
     createdAt: task.createdAt,
+  };
+}
+
+function prepareTaskCopyInput(body: {
+  title?: string;
+  description?: string;
+  titleI18n?: unknown;
+  descriptionI18n?: unknown;
+  sourceLocale?: string;
+}) {
+  const sourceLocale: Locale = isLocale(body.sourceLocale ?? "")
+    ? (body.sourceLocale as Locale)
+    : Locales.en;
+
+  let titleI18n = normalizeLocalizedMap(body.titleI18n);
+  let descriptionI18n = normalizeLocalizedMap(body.descriptionI18n);
+
+  if (Object.keys(titleI18n).length === 0 && body.title?.trim()) {
+    titleI18n = buildLocalizedMapFromPrimary(body.title, sourceLocale);
+  }
+  if (
+    Object.keys(descriptionI18n).length === 0 &&
+    typeof body.description === "string"
+  ) {
+    descriptionI18n = buildLocalizedMapFromPrimary(
+      body.description,
+      sourceLocale,
+    );
+  }
+
+  const title = (titleI18n[sourceLocale] ?? "").trim();
+  if (!title) {
+    throw validation("Title is required for the primary language");
+  }
+
+  const description = (descriptionI18n[sourceLocale] ?? "").trim();
+
+  return {
+    sourceLocale,
+    titleI18n: { ...titleI18n, [sourceLocale]: title },
+    descriptionI18n: description
+      ? { ...descriptionI18n, [sourceLocale]: description }
+      : descriptionI18n,
+    title,
+    description,
   };
 }
 
@@ -83,6 +181,8 @@ export function publicModule(_config: AppConfig) {
       const sort = query.sort ?? "newest";
       const limit = Math.min(Math.max(Number(query.limit ?? 20) || 20, 1), 100);
       const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+      const preferredLocale =
+        query.locale && isLocale(query.locale) ? query.locale : undefined;
 
       const conditions = [inArray(tasks.status, statusFilter)];
 
@@ -97,8 +197,9 @@ export function publicModule(_config: AppConfig) {
         }
       }
 
-      if (query.languageTag) {
-        conditions.push(eq(tasks.languageTag, query.languageTag));
+      const localeFilter = query.localeFilter ?? query.languageTag;
+      if (localeFilter && isLocale(localeFilter)) {
+        conditions.push(sql`${tasks.titleI18n} ? ${localeFilter}`);
       }
 
       const whereClause = and(...conditions);
@@ -138,7 +239,7 @@ export function publicModule(_config: AppConfig) {
 
       return {
         items: rows.map((task) =>
-          publicTask(task, nameById.get(task.publisherId)),
+          publicTask(task, nameById.get(task.publisherId), preferredLocale),
         ),
         total,
         limit,
@@ -150,6 +251,8 @@ export function publicModule(_config: AppConfig) {
         type: t.Optional(t.String()),
         minPrice: t.Optional(t.String()),
         languageTag: t.Optional(t.String()),
+        localeFilter: t.Optional(t.String()),
+        locale: t.Optional(t.String()),
         sort: t.Optional(t.String()),
         limit: t.Optional(t.String()),
         offset: t.Optional(t.String()),
@@ -158,7 +261,7 @@ export function publicModule(_config: AppConfig) {
   )
   .get(
     "/tasks/:id",
-    async ({ params }) => {
+    async ({ params, query }) => {
       const db = getDb();
       const task = await db.query.tasks.findFirst({
         where: eq(tasks.id, params.id),
@@ -174,8 +277,10 @@ export function publicModule(_config: AppConfig) {
       const publisher = await db.query.users.findFirst({
         where: eq(users.id, task.publisherId),
       });
+      const preferredLocale =
+        query.locale && isLocale(query.locale) ? query.locale : undefined;
       return {
-        ...publicTask(task, publisher?.displayName),
+        ...publicTask(task, publisher?.displayName, preferredLocale),
         proofSchema: task.proofSchema,
         submitDeadlineHours: task.submitDeadlineHours,
         reviewDeadlineHours: task.reviewDeadlineHours,
@@ -184,9 +289,11 @@ export function publicModule(_config: AppConfig) {
     },
     {
       params: t.Object({ id: t.String() }),
+      query: t.Object({
+        locale: t.Optional(t.String()),
+      }),
     },
   );
-
 }
 
 export function tasksModule(config: AppConfig) {
@@ -217,18 +324,61 @@ export function tasksModule(config: AppConfig) {
     };
   })
   .get("/", async ({ request, query }) => {
-      const { user } = await authFromRequest(request, config.SESSION_SECRET);
+    const { user } = await authFromRequest(request, config.SESSION_SECRET);
     const current = requireUser(user);
     const db = getDb();
     const rows = await db.query.tasks.findMany({
       where: eq(tasks.publisherId, current.id),
       orderBy: [desc(tasks.createdAt)],
     });
+    const items = rows.map((task) => publicTask(task));
     if (query.status) {
-      return { items: rows.filter((row) => row.status === query.status) };
+      return { items: items.filter((row) => row.status === query.status) };
     }
-    return { items: rows };
+    return { items };
   })
+  .post(
+    "/translate",
+    async ({ request, body }) => {
+      const { user } = await authFromRequest(request, config.SESSION_SECRET);
+      const current = requireUser(user);
+      const limited = checkRateLimit(`task-translate:${current.id}`, 20, 60_000);
+      if (!limited.ok) {
+        throw new AppError(ErrorCode.RATE_LIMITED, "Too many translation requests", 429);
+      }
+
+      const sourceLocale = isLocale(body.sourceLocale)
+        ? body.sourceLocale
+        : null;
+      if (!sourceLocale) {
+        throw validation("Invalid source locale");
+      }
+      const title = body.title.trim();
+      if (!title) {
+        throw validation("Title is required for translation");
+      }
+      const targetLocales = assertSupportedLocales(
+        body.targetLocales ?? [],
+      ).filter((locale) => locale !== sourceLocale);
+
+      const translated = await translateTaskCopy({
+        sourceLocale,
+        title,
+        description: body.description?.trim() ?? "",
+        targetLocales,
+      });
+
+      return translated;
+    },
+    {
+      body: t.Object({
+        sourceLocale: t.String(),
+        title: t.String({ minLength: 1 }),
+        description: t.Optional(t.String()),
+        targetLocales: t.Optional(t.Array(t.String())),
+      }),
+    },
+  )
   .post(
     "/",
     async ({ request, body }) => {
@@ -241,20 +391,23 @@ export function tasksModule(config: AppConfig) {
         throw validation("Price and quota must be positive");
       }
 
+      const copy = prepareTaskCopyInput(body);
       const db = getDb();
       const [task] = await db
         .insert(tasks)
         .values({
           publisherId: current.id,
-          title: body.title,
-          description: body.description ?? "",
+          title: copy.title,
+          description: copy.description,
+          titleI18n: copy.titleI18n,
+          descriptionI18n: copy.descriptionI18n,
+          sourceLocale: copy.sourceLocale,
           type: body.type,
           targetUrl: body.targetUrl,
           unitPriceMicros: body.unitPriceMicros,
           totalQuota: body.totalQuota,
           remainingQuota: body.totalQuota,
           status: TaskStatus.draft,
-          languageTag: body.languageTag ?? "en",
           submitDeadlineHours: body.submitDeadlineHours ?? 72,
           reviewDeadlineHours: body.reviewDeadlineHours ?? 72,
           allowResubmit: body.allowResubmit ?? true,
@@ -277,20 +430,22 @@ export function tasksModule(config: AppConfig) {
         const updated = await db.query.tasks.findFirst({
           where: eq(tasks.id, task.id),
         });
-        return { task: updated };
+        return { task: updated ? publicTask(updated) : publicTask(task) };
       }
 
-      return { task };
+      return { task: publicTask(task) };
     },
     {
       body: t.Object({
-        title: t.String({ minLength: 1 }),
+        title: t.Optional(t.String()),
         description: t.Optional(t.String()),
+        titleI18n: t.Optional(t.Record(t.String(), t.String())),
+        descriptionI18n: t.Optional(t.Record(t.String(), t.String())),
+        sourceLocale: t.Optional(t.String()),
         type: t.String(),
         targetUrl: t.Optional(t.String()),
         unitPriceMicros: t.Number(),
         totalQuota: t.Number(),
-        languageTag: t.Optional(t.String()),
         submitDeadlineHours: t.Optional(t.Number()),
         reviewDeadlineHours: t.Optional(t.Number()),
         allowResubmit: t.Optional(t.Boolean()),
@@ -323,7 +478,7 @@ export function tasksModule(config: AppConfig) {
       const updated = await db.query.tasks.findFirst({
         where: eq(tasks.id, task.id),
       });
-      return { task: updated };
+      return { task: updated ? publicTask(updated) : null };
     },
     { params: t.Object({ id: t.String() }) },
   )
@@ -337,9 +492,6 @@ export function tasksModule(config: AppConfig) {
         where: eq(tasks.id, params.id),
       });
       if (!task || task.publisherId !== current.id) throw notFound("Task not found");
-      if (task.status !== TaskStatus.draft && body.title) {
-        // allow limited edits when draft only for core fields
-      }
       if (task.status !== TaskStatus.draft) {
         if (body.status) {
           const allowedTargets = [
@@ -380,16 +532,27 @@ export function tasksModule(config: AppConfig) {
             .set({ status: body.status, updatedAt: new Date() })
             .where(eq(tasks.id, task.id))
             .returning();
-          return { task: updated };
+          return { task: publicTask(updated) };
         }
         throw conflict("Only draft tasks can be fully edited");
       }
 
+      const copy = prepareTaskCopyInput({
+        title: body.title ?? task.title,
+        description: body.description ?? task.description,
+        titleI18n: body.titleI18n ?? task.titleI18n,
+        descriptionI18n: body.descriptionI18n ?? task.descriptionI18n,
+        sourceLocale: body.sourceLocale ?? task.sourceLocale,
+      });
+
       const [updated] = await db
         .update(tasks)
         .set({
-          title: body.title ?? task.title,
-          description: body.description ?? task.description,
+          title: copy.title,
+          description: copy.description,
+          titleI18n: copy.titleI18n,
+          descriptionI18n: copy.descriptionI18n,
+          sourceLocale: copy.sourceLocale,
           targetUrl: body.targetUrl === undefined ? task.targetUrl : body.targetUrl,
           proofSchema:
             body.proofSchema === undefined
@@ -399,13 +562,16 @@ export function tasksModule(config: AppConfig) {
         })
         .where(eq(tasks.id, task.id))
         .returning();
-      return { task: updated };
+      return { task: publicTask(updated) };
     },
     {
       params: t.Object({ id: t.String() }),
       body: t.Object({
         title: t.Optional(t.String()),
         description: t.Optional(t.String()),
+        titleI18n: t.Optional(t.Record(t.String(), t.String())),
+        descriptionI18n: t.Optional(t.Record(t.String(), t.String())),
+        sourceLocale: t.Optional(t.String()),
         targetUrl: t.Optional(t.Union([t.String(), t.Null()])),
         proofSchema: t.Optional(t.Any()),
         status: t.Optional(t.String()),
@@ -446,7 +612,6 @@ export function tasksModule(config: AppConfig) {
     },
     { params: t.Object({ id: t.String() }) },
   );
-
 }
 
 export function joinsModule(config: AppConfig) {

@@ -21,12 +21,37 @@ import {
   TaskStatus,
   WithdrawalStatus,
   formatUsdt,
+  isChain,
+  parseChain,
 } from "@xs-share/shared";
 import { getDb } from "../lib/db";
 import { AppError, conflict, notFound, validation } from "../lib/errors";
-import { DEFAULT_CHAIN, getChainAdapter } from "./chain";
+import {
+  DEFAULT_CHAIN,
+  getChainAdapter,
+  isChainEnabled,
+} from "./chain";
 import { bpsAmount, getPlatformSettings } from "./config";
 import { notifyUser } from "./notify";
+
+function resolveChain(value?: string | null): Chain {
+  const chain = parseChain(value);
+  if (value && !isChain(value)) {
+    throw validation("Unsupported chain");
+  }
+  if (!isChainEnabled(chain)) {
+    throw validation(`Chain ${chain} is not enabled`);
+  }
+  return chain;
+}
+
+async function confirmationsForChain(chain: Chain) {
+  const settings = await getPlatformSettings();
+  if (chain === Chain.ERC20) {
+    return settings.erc20Confirmations;
+  }
+  return settings.trc20Confirmations;
+}
 
 async function getWalletOrThrow(userId: string) {
   const db = getDb();
@@ -82,17 +107,25 @@ async function creditAvailable(input: {
   return ledger;
 }
 
-export async function ensureDepositAddress(userId: string) {
+export async function ensureDepositAddress(
+  userId: string,
+  chainInput?: string | null,
+) {
+  const chain = resolveChain(chainInput ?? DEFAULT_CHAIN);
   const db = getDb();
   const existing = await db.query.depositAddresses.findFirst({
-    where: eq(depositAddresses.userId, userId),
+    where: and(
+      eq(depositAddresses.userId, userId),
+      eq(depositAddresses.chain, chain),
+    ),
   });
   if (existing) return existing;
 
-  const adapter = getChainAdapter();
+  const adapter = getChainAdapter(chain);
   const [{ value: addressCount }] = await db
     .select({ value: count() })
-    .from(depositAddresses);
+    .from(depositAddresses)
+    .where(eq(depositAddresses.chain, chain));
   const derivationIndex = Number(addressCount);
   const address = await adapter.allocateAddress(userId, derivationIndex);
 
@@ -100,7 +133,7 @@ export async function ensureDepositAddress(userId: string) {
     .insert(depositAddresses)
     .values({
       userId,
-      chain: DEFAULT_CHAIN,
+      chain,
       address,
       derivationIndex,
     })
@@ -124,8 +157,9 @@ export async function creditOnChainDeposit(input: {
   }
 
   const db = getDb();
+  const chain = parseChain(input.chain);
   const existing = await db.query.deposits.findFirst({
-    where: eq(deposits.txHash, input.txHash),
+    where: and(eq(deposits.chain, chain), eq(deposits.txHash, input.txHash)),
   });
 
   if (existing) {
@@ -194,7 +228,7 @@ export async function creditOnChainDeposit(input: {
       .insert(deposits)
       .values({
         userId: input.userId,
-        chain: input.chain ?? Chain.TRC20,
+        chain: chain,
         address: input.address,
         txHash: input.txHash,
         fromAddress: input.fromAddress,
@@ -220,7 +254,7 @@ export async function creditOnChainDeposit(input: {
       .insert(deposits)
       .values({
         userId: input.userId,
-        chain: input.chain ?? Chain.TRC20,
+        chain: chain,
         address: input.address,
         txHash: input.txHash,
         fromAddress: input.fromAddress,
@@ -238,7 +272,7 @@ export async function creditOnChainDeposit(input: {
       .insert(deposits)
       .values({
         userId: input.userId,
-        chain: input.chain ?? Chain.TRC20,
+        chain: chain,
         address: input.address,
         txHash: input.txHash,
         fromAddress: input.fromAddress,
@@ -276,15 +310,17 @@ export async function creditOnChainDeposit(input: {
 export async function registerDepositTx(input: {
   userId: string;
   txHash: string;
+  chain?: string | null;
 }) {
   const txHash = input.txHash.trim();
   if (!txHash || txHash.length < 16) {
     throw validation("Invalid transaction hash");
   }
 
+  const chain = resolveChain(input.chain);
   const db = getDb();
   const existing = await db.query.deposits.findFirst({
-    where: eq(deposits.txHash, txHash),
+    where: and(eq(deposits.chain, chain), eq(deposits.txHash, txHash)),
   });
   if (existing) {
     if (existing.userId !== input.userId) {
@@ -296,9 +332,9 @@ export async function registerDepositTx(input: {
     };
   }
 
-  const addressRow = await ensureDepositAddress(input.userId);
-  const adapter = getChainAdapter();
-  const settings = await getPlatformSettings();
+  const addressRow = await ensureDepositAddress(input.userId, chain);
+  const adapter = getChainAdapter(chain);
+  const requiredConfirmations = await confirmationsForChain(chain);
   const transfer = await adapter.getIncomingUsdtByTxHash(
     txHash,
     addressRow.address,
@@ -306,7 +342,16 @@ export async function registerDepositTx(input: {
   if (!transfer) {
     throw notFound("Transaction not found yet");
   }
-  if (transfer.toAddress !== addressRow.address) {
+
+  const transferTo =
+    chain === Chain.ERC20
+      ? transfer.toAddress.toLowerCase()
+      : transfer.toAddress;
+  const expectedTo =
+    chain === Chain.ERC20
+      ? addressRow.address.toLowerCase()
+      : addressRow.address;
+  if (transferTo !== expectedTo) {
     throw conflict("Transaction is not sent to your deposit address");
   }
 
@@ -317,8 +362,8 @@ export async function registerDepositTx(input: {
     fromAddress: transfer.fromAddress,
     amountMicros: transfer.amountMicros,
     confirmations: transfer.confirmations,
-    requiredConfirmations: settings.trc20Confirmations,
-    chain: addressRow.chain,
+    requiredConfirmations,
+    chain,
   });
 
   if (result.credited) {
@@ -338,23 +383,29 @@ export async function simulateDeposit(input: {
   amountMicros: number;
   confirmations?: number;
   txHash?: string;
+  chain?: string | null;
 }) {
-  const settings = await getPlatformSettings();
-  const addressRow = await ensureDepositAddress(input.userId);
-  const adapter = getChainAdapter();
+  const chain = resolveChain(input.chain);
+  const addressRow = await ensureDepositAddress(input.userId, chain);
+  const adapter = getChainAdapter(chain);
   if (!adapter.injectIncoming) {
     throw conflict("Deposit simulate only available with mock chain adapter");
   }
 
-  const required = settings.trc20Confirmations;
+  const required = await confirmationsForChain(chain);
   const confirmations = input.confirmations ?? required;
   const txHash =
     input.txHash ??
-    `mocktx_${input.userId.slice(0, 8)}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+    `mocktx_${chain}_${input.userId.slice(0, 8)}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+
+  const fromAddress =
+    chain === Chain.ERC20
+      ? "0x0000000000000000000000000000000000000001"
+      : "TMockSender000000000000000000000001";
 
   adapter.injectIncoming({
     txHash,
-    fromAddress: "TMockSender000000000000000000000001",
+    fromAddress,
     toAddress: addressRow.address,
     amountMicros: input.amountMicros,
     confirmations,
@@ -365,10 +416,11 @@ export async function simulateDeposit(input: {
     userId: input.userId,
     address: addressRow.address,
     txHash,
-    fromAddress: "TMockSender000000000000000000000001",
+    fromAddress,
     amountMicros: input.amountMicros,
     confirmations,
     requiredConfirmations: required,
+    chain,
   });
 
   if (result.credited) {
@@ -387,9 +439,11 @@ export async function requestWithdraw(input: {
   userId: string;
   amountMicros: number;
   toAddress: string;
+  chain?: string | null;
 }) {
   const settings = await getPlatformSettings();
-  const adapter = getChainAdapter();
+  const chain = resolveChain(input.chain);
+  const adapter = getChainAdapter(chain);
 
   if (input.amountMicros < settings.minWithdrawMicros) {
     throw validation(
@@ -400,7 +454,11 @@ export async function requestWithdraw(input: {
     throw validation("Withdraw amount must exceed network fee");
   }
   if (!adapter.isValidAddress(input.toAddress.trim())) {
-    throw validation("Invalid TRC20 address");
+    throw validation(
+      chain === Chain.ERC20
+        ? "Invalid ERC20 address"
+        : "Invalid TRC20 address",
+    );
   }
 
   const networkFeeMicros = settings.withdrawNetworkFeeMicros;
@@ -434,7 +492,7 @@ export async function requestWithdraw(input: {
       .insert(withdrawals)
       .values({
         userId: input.userId,
-        chain: Chain.TRC20,
+        chain,
         toAddress: input.toAddress.trim(),
         amountMicros: input.amountMicros,
         networkFeeMicros,
@@ -449,7 +507,7 @@ export async function requestWithdraw(input: {
       amountMicros: -input.amountMicros,
       balanceAfterMicros: updated.availableMicros,
       withdrawalId: created.id,
-      note: "withdraw reserved",
+      note: `withdraw request ${chain}`,
     });
 
     return created;

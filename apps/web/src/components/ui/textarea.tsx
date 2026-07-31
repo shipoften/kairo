@@ -1,21 +1,31 @@
 import { cn } from "@/lib/cn";
+import {
+  controlClassName,
+  type ControlSize,
+} from "./control";
 
-export type TextareaProps = Omit<
-  React.TextareaHTMLAttributes<HTMLTextAreaElement>,
-  "placeholder"
-> & {
-  placeholder: string;
+export type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  size?: ControlSize;
+  invalid?: boolean;
 };
 
-export function Textarea({ className, placeholder, ...props }: TextareaProps) {
+export function Textarea({
+  className,
+  size = "md",
+  invalid = false,
+  placeholder,
+  ...props
+}: TextareaProps) {
   return (
     <textarea
+      aria-invalid={invalid || undefined}
       className={cn(
-        "w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none transition placeholder:text-muted focus:border-accent",
+        controlClassName({ size, invalid }),
+        "min-h-24 resize-y",
         className,
       )}
-      {...props}
       placeholder={placeholder}
+      {...props}
     />
   );
 }
